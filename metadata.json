@@ -1,0 +1,6 @@
+{
+  "name": "Amethyst Launcher Android",
+  "description": "Port para Android de Amethyst Launcher (MCBE & AmethystAPI): gestión de perfiles, mods nativos arm64-v8a, runtimes y arquitectura Kotlin/NDK.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
