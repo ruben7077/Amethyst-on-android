@@ -159,8 +159,15 @@ fun ModsScreen(
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(mod.name, style = MaterialTheme.typography.titleMedium)
+                                val title = if (mod.isBonus) "${mod.name} (Mod Bonus)" else mod.name
+                                Text(title, style = MaterialTheme.typography.titleMedium)
                                 Text("${mod.sourceFormat} · ${mod.libraryFile} · ${mod.abi} · v${mod.version}")
+                                if (!mod.hasAndroidBinary) {
+                                    Text(
+                                        "Packs .amethyst extraídos (binario Windows .dll sin .so arm64-v8a)",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                             }
                             Switch(checked = activeIds.contains(mod.id), onCheckedChange = { onToggleMod(mod.id) })
                         }

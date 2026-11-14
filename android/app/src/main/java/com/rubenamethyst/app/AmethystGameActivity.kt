@@ -24,15 +24,22 @@ class AmethystGameActivity : ComponentActivity() {
         val mcNativeDir = intent.getStringExtra("amethyst_mc_native_dir") ?: ""
         val runtimeSoPath = intent.getStringExtra("amethyst_runtime_so") ?: ""
         val modSoPaths = intent.getStringArrayExtra("amethyst_mod_paths") ?: emptyArray()
+        val packNotices = intent.getStringArrayExtra("amethyst_pack_notices") ?: emptyArray()
 
-        val report = AmethystNativeBridge.nativeBootstrapMods(
+        val nativeReport = AmethystNativeBridge.nativeBootstrapMods(
             mcNativeDir = mcNativeDir,
             runtimeSoPath = runtimeSoPath,
             modSoPaths = modSoPaths,
             mcVersion = mcVersion
         )
+        val packSection = if (packNotices.isNotEmpty()) {
+            "\n" + packNotices.joinToString("\n") { "[PACK_ONLY] $it" }
+        } else {
+            ""
+        }
+        val report = nativeReport + packSection
 
-        val canTryExternalPatched = report.contains("RUNTIME_OK") && !report.contains("MOD_ERROR")
+        val canTryExternalPatched = nativeReport.contains("RUNTIME_OK") && !nativeReport.contains("MOD_ERROR")
 
         setContent {
             AmethystTheme {

@@ -36,6 +36,10 @@ export interface ModEntry {
   sizeKb: number;
   dependencies: string[];
   isUserImported?: boolean;
+  isBonus?: boolean;
+  sourceFormat?: string;
+  hasAndroidBinary?: boolean;
+  downloadUrl?: string;
 }
 
 export interface RuntimeEntry {

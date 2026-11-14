@@ -10,6 +10,7 @@ import {
   evaluateLaunchReadiness,
   filterMods,
   filterProfiles,
+  parseAmethystModJson,
   toggleModInProfile,
   validateModImport,
   validateProfileInput,
@@ -147,9 +148,13 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
   assert.ok(gradleFile?.content.includes('applicationId = "com.rubenamethyst.app"'));
   assert.ok(gradleFile?.content.includes('namespace = "com.rubenamethyst.app"'));
 
-  const zipBytes = buildZipArchive(
-    ANDROID_PORT_FILES.map((f) => ({ path: `android/${f.path}`, content: f.content }))
-  );
+  const zipBytes = buildZipArchive([
+    ...ANDROID_PORT_FILES.map((f) => ({ path: `android/${f.path}`, content: f.content })),
+    {
+      path: 'android/app/src/main/assets/bonus_mods/Create@0.1.1.amethyst',
+      content: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+    },
+  ]);
   // ZIP local file header magic bytes PK\x03\x04
   assert.equal(zipBytes[0], 0x50);
   assert.equal(zipBytes[1], 0x4b);
@@ -158,4 +163,36 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
   const decodedText = new TextDecoder().decode(zipBytes);
   assert.ok(decodedText.includes('android/app/build.gradle.kts'));
   assert.ok(decodedText.includes('com.rubenamethyst.app'));
+  assert.ok(decodedText.includes('Create@0.1.1.amethyst'));
+});
+
+test('CREATE_BONUS_MOD and parseAmethystModJson support Amethyst 1.3.0 Create@0.1.1.amethyst', () => {
+  const state = createInitialLauncherState();
+  const bonus = state.mods.find((m) => m.isBonus);
+  assert.ok(bonus);
+  assert.equal(bonus.name, 'Create');
+  assert.equal(bonus.version, '0.1.1');
+  assert.equal(bonus.downloadUrl, '/bonus-mods/Create@0.1.1.amethyst');
+
+  const sampleModJson = JSON.stringify({
+    format_version: '1.3.0',
+    meta: {
+      name: 'Create',
+      version: '0.1.1',
+      namespace: 'create',
+      author: 'FrederoxDev',
+      platforms: {
+        'win-client': {
+          game_builds: [{ version: '1.26.42' }],
+        },
+      },
+    },
+  });
+  const parsed = parseAmethystModJson(sampleModJson);
+  assert.ok(parsed);
+  assert.equal(parsed.name, 'Create');
+  assert.equal(parsed.version, '0.1.1');
+  assert.equal(parsed.author, 'FrederoxDev');
+  assert.equal(parsed.id, 'create');
+  assert.equal(parsed.targetMcVersion, '1.26.42');
 });

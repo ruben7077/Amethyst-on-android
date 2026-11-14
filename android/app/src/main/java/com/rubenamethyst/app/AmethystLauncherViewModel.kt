@@ -19,7 +19,7 @@ import java.io.File
 
 class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = ModRepository(app.getExternalFilesDir(null) ?: app.filesDir)
-    private val _uiState = MutableStateFlow(repository.loadInitialState())
+    private val _uiState = MutableStateFlow(repository.loadInitialState(app.assets))
     val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()
 
     init {
@@ -111,8 +111,13 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val modPaths = state.activeMods
+            .filter { it.hasAndroidBinary && it.localPath.isNotBlank() }
             .map { it.localPath }
-            .filter { it.isNotBlank() }
+            .toTypedArray()
+
+        val packNotices = state.activeMods
+            .filter { !it.hasAndroidBinary }
+            .map { "${it.name} v${it.version} (${it.libraryFile}): packs extraídos en ${it.packDir}" }
             .toTypedArray()
 
         val hostIntent = Intent(context, AmethystGameActivity::class.java).apply {
@@ -122,6 +127,7 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
             putExtra("amethyst_mc_native_dir", mcNativeDir)
             putExtra("amethyst_runtime_so", state.config.runtimePath)
             putExtra("amethyst_mod_paths", modPaths)
+            putExtra("amethyst_pack_notices", packNotices)
         }
         context.startActivity(hostIntent)
     }

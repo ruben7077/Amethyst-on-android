@@ -35,20 +35,42 @@ export const PortArchitectureView: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleExportProjectZip = () => {
-    const zipBytes = buildZipArchive(
-      ANDROID_PORT_FILES.map((file) => ({
-        path: file.path.startsWith('.github/') ? file.path : `android/${file.path}`,
-        content: file.content,
-      }))
-    );
-    const blob = new Blob([zipBytes.buffer as ArrayBuffer], { type: 'application/zip' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `amethyst-launcher-${ANDROID_APPLICATION_ID}.zip`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportProjectZip = async () => {
+    setExporting(true);
+    try {
+      const files: Array<{ path: string; content: string | Uint8Array }> = ANDROID_PORT_FILES.map(
+        (file) => ({
+          path: file.path.startsWith('.github/') ? file.path : `android/${file.path}`,
+          content: file.content,
+        })
+      );
+
+      try {
+        const res = await fetch('/bonus-mods/Create@0.1.1.amethyst');
+        if (res.ok) {
+          const buffer = await res.arrayBuffer();
+          files.push({
+            path: 'android/app/src/main/assets/bonus_mods/Create@0.1.1.amethyst',
+            content: new Uint8Array(buffer),
+          });
+        }
+      } catch {
+        // Offline fallback: export source files cleanly even without fetching the binary bonus mod
+      }
+
+      const zipBytes = buildZipArchive(files);
+      const blob = new Blob([zipBytes.buffer as ArrayBuffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `amethyst-launcher-${ANDROID_APPLICATION_ID}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -69,10 +91,11 @@ export const PortArchitectureView: React.FC = () => {
         <button
           type="button"
           onClick={handleExportProjectZip}
-          className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
+          disabled={exporting}
+          className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] disabled:opacity-60 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
         >
           <Download className="w-4 h-4" />
-          <span>Descargar Proyecto (.zip)</span>
+          <span>{exporting ? 'Empaquetando (.zip)...' : 'Descargar Proyecto (.zip)'}</span>
         </button>
       </div>
 
@@ -87,7 +110,8 @@ export const PortArchitectureView: React.FC = () => {
             Paquete Android listo para compilar: {ANDROID_APPLICATION_ID}
           </h2>
           <p className="text-xs md:text-sm text-[#9B8FB8] leading-relaxed">
-            Todos los archivos Gradle, Kotlin y NDK C++ ya están guardados dentro del proyecto en{' '}
+            Todos los archivos Gradle, Kotlin, NDK C++ y el mod bonus{' '}
+            <code className="text-white font-mono">Create@0.1.1.amethyst</code> ya están guardados dentro del proyecto en{' '}
             <code className="text-white font-mono">android/</code> y listos para descargar en ZIP.
             Como este entorno web solo dispone de Node.js (sin Java JDK, Android SDK ni NDK), ejecuta{' '}
             <code className="text-[#A78BFA] font-mono">./gradlew assembleDebug</code> localmente o usa el flujo incluido en{' '}

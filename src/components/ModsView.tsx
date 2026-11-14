@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Download, Plus, Search, Trash2, Upload, X } from 'lucide-react';
-import { filterMods, validateModImport } from '../core/launcherLogic';
+import { Download, Package, Plus, Search, Trash2, Upload, X } from 'lucide-react';
+import { filterMods, parseAmethystModJson, validateModImport } from '../core/launcherLogic';
 import {
   AndroidAbi,
   LauncherState,
@@ -53,14 +53,19 @@ export const ModsView: React.FC<ModsViewProps> = ({
     if (file.name.endsWith('.json')) {
       try {
         const text = await file.text();
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        if (typeof parsed.name === 'string') setModName(parsed.name);
-        if (typeof parsed.version === 'string') setModVersion(parsed.version);
-        if (typeof parsed.author === 'string') setModAuthor(parsed.author);
-        if (typeof parsed.description === 'string') setModDescription(parsed.description);
-        if (typeof parsed.libraryFile === 'string') {
+        const parsed = parseAmethystModJson(text);
+        if (!parsed) {
+          setImportErrors(['El archivo mod.json no tiene un formato JSON válido.']);
+          return;
+        }
+        if (parsed.name) setModName(parsed.name);
+        if (parsed.version) setModVersion(parsed.version);
+        if (parsed.author) setModAuthor(parsed.author);
+        if (parsed.description) setModDescription(parsed.description);
+        if (parsed.targetMcVersion) setModTargetMc(parsed.targetMcVersion);
+        if (parsed.libraryFile) {
           setModLibraryFile(parsed.libraryFile);
-        } else if (typeof parsed.name === 'string') {
+        } else if (parsed.name) {
           setModLibraryFile(
             `lib${parsed.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.so`
           );
@@ -231,58 +236,122 @@ export const ModsView: React.FC<ModsViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="rounded-2xl bg-[#13111C] border border-white/[0.08] divide-y divide-white/[0.06]">
-            {visibleMods.map((mod) => {
-              const enabled = Boolean(activeProfile?.modIds.includes(mod.id));
-              return (
-                <div
-                  key={mod.id}
-                  className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-                >
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                      <h2 className="text-base font-semibold text-white">{mod.name}</h2>
-                      <span className="text-xs font-mono text-[#A78BFA] tabular-nums">
-                        v{mod.version}
-                      </span>
+          <div className="space-y-4">
+            {visibleMods
+              .filter((mod) => mod.isBonus)
+              .map((mod) => {
+                const enabled = Boolean(activeProfile?.modIds.includes(mod.id));
+                return (
+                  <section
+                    key={mod.id}
+                    aria-label="Mod bonus incluido"
+                    className="rounded-2xl bg-[#161324] border border-[#8B5CF6]/35 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  >
+                    <div className="min-w-0 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Package className="w-4 h-4 text-[#A78BFA] shrink-0" />
+                        <span className="px-2 py-0.5 rounded-md bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 text-[11px] font-semibold uppercase tracking-wide text-[#C4B5FD]">
+                          Mod Bonus · .amethyst
+                        </span>
+                        <h2 className="text-base font-semibold text-white">{mod.name}</h2>
+                        <span className="text-xs font-mono text-[#A78BFA] tabular-nums">
+                          v{mod.version}
+                        </span>
+                      </div>
+                      <p className="text-sm text-[#C4BBE0] leading-relaxed">{mod.description}</p>
+                      <p className="text-xs text-[#9B8FB8] font-mono tabular-nums">
+                        {mod.libraryFile} · {mod.abi} · MCBE {mod.targetMcVersion} · {mod.author} · {(mod.sizeKb / 1024).toFixed(1)} MB
+                      </p>
                     </div>
-                    <p className="text-sm text-[#9B8FB8] leading-relaxed">{mod.description}</p>
-                    <p className="text-xs text-[#6A6085] font-mono tabular-nums">
-                      {mod.libraryFile} · {mod.abi} · MCBE {mod.targetMcVersion} · {mod.author} · {mod.sizeKb} KB
-                    </p>
-                  </div>
 
-                  <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
-                    {mod.isUserImported && (
+                    <div className="flex flex-wrap items-center gap-2.5 self-end md:self-center shrink-0">
+                      {mod.downloadUrl && (
+                        <a
+                          href={mod.downloadUrl}
+                          download="Create@0.1.1.amethyst"
+                          className="min-h-[44px] px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-xs font-medium text-white flex items-center gap-2 transition-colors whitespace-nowrap"
+                        >
+                          <Download className="w-4 h-4 text-[#A78BFA]" />
+                          <span>Descargar .amethyst</span>
+                        </a>
+                      )}
                       <button
                         type="button"
-                        onClick={() => onDeleteMod(mod.id)}
-                        aria-label={`Eliminar mod ${mod.name}`}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white/[0.06] hover:bg-rose-500/20 hover:text-rose-300 text-[#9B8FB8] transition-colors"
+                        role="switch"
+                        aria-checked={enabled}
+                        aria-label={`Activar ${mod.name} en perfil activo`}
+                        disabled={isVanillaActive}
+                        onClick={() => onToggleMod(mod.id)}
+                        className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                          enabled
+                            ? 'bg-[#8B5CF6] text-white hover:bg-[#7C3AED]'
+                            : 'bg-white/[0.07] text-[#C4BBE0] hover:bg-white/[0.12]'
+                        }`}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {enabled ? 'Activado' : 'Desactivado'}
                       </button>
-                    )}
+                    </div>
+                  </section>
+                );
+              })}
 
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={enabled}
-                      aria-label={`Activar ${mod.name} en perfil activo`}
-                      disabled={isVanillaActive}
-                      onClick={() => onToggleMod(mod.id)}
-                      className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
-                        enabled
-                          ? 'bg-[#8B5CF6] text-white hover:bg-[#7C3AED]'
-                          : 'bg-white/[0.07] text-[#C4BBE0] hover:bg-white/[0.12]'
-                      }`}
-                    >
-                      {enabled ? 'Activado' : 'Desactivado'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            {visibleMods.some((mod) => !mod.isBonus) && (
+              <div className="rounded-2xl bg-[#13111C] border border-white/[0.08] divide-y divide-white/[0.06]">
+                {visibleMods
+                  .filter((mod) => !mod.isBonus)
+                  .map((mod) => {
+                    const enabled = Boolean(activeProfile?.modIds.includes(mod.id));
+                    return (
+                      <div
+                        key={mod.id}
+                        className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                            <h2 className="text-base font-semibold text-white">{mod.name}</h2>
+                            <span className="text-xs font-mono text-[#A78BFA] tabular-nums">
+                              v{mod.version}
+                            </span>
+                          </div>
+                          <p className="text-sm text-[#9B8FB8] leading-relaxed">{mod.description}</p>
+                          <p className="text-xs text-[#6A6085] font-mono tabular-nums">
+                            {mod.libraryFile} · {mod.abi} · MCBE {mod.targetMcVersion} · {mod.author} · {mod.sizeKb} KB
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
+                          {mod.isUserImported && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteMod(mod.id)}
+                              aria-label={`Eliminar mod ${mod.name}`}
+                              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white/[0.06] hover:bg-rose-500/20 hover:text-rose-300 text-[#9B8FB8] transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={enabled}
+                            aria-label={`Activar ${mod.name} en perfil activo`}
+                            disabled={isVanillaActive}
+                            onClick={() => onToggleMod(mod.id)}
+                            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                              enabled
+                                ? 'bg-[#8B5CF6] text-white hover:bg-[#7C3AED]'
+                                : 'bg-white/[0.07] text-[#C4BBE0] hover:bg-white/[0.12]'
+                            }`}
+                          >
+                            {enabled ? 'Activado' : 'Desactivado'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         )
       ) : (

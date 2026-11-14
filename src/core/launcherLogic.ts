@@ -14,6 +14,82 @@ import {
 
 export const STORAGE_KEY = 'amethyst_android_launcher_state_v1';
 
+export const CREATE_BONUS_MOD: ModEntry = {
+  id: 'create-mod-bonus',
+  name: 'Create',
+  version: '0.1.1',
+  author: 'FrederoxDev',
+  description:
+    'Mod bonus .amethyst incluido (behavior_packs + resource_packs). Release original win-client (Create.dll); requiere compilación .so arm64-v8a para hooks nativos C++ en Android.',
+  targetApiVersion: '2.2.5',
+  targetMcVersion: '1.26.42',
+  abi: AndroidAbi.ARM64_V8A,
+  libraryFile: 'Create@0.1.1.amethyst',
+  sizeKb: 10658,
+  dependencies: [],
+  isBonus: true,
+  sourceFormat: '.amethyst',
+  hasAndroidBinary: false,
+  downloadUrl: '/bonus-mods/Create@0.1.1.amethyst',
+};
+
+export interface ParsedAmethystMeta {
+  id?: string;
+  name?: string;
+  version?: string;
+  author?: string;
+  description?: string;
+  libraryFile?: string;
+  targetMcVersion?: string;
+}
+
+export function parseAmethystModJson(jsonText: string): ParsedAmethystMeta | null {
+  try {
+    const raw = JSON.parse(jsonText) as Record<string, unknown>;
+    const nestedMeta =
+      raw.meta && typeof raw.meta === 'object'
+        ? (raw.meta as Record<string, unknown>)
+        : raw;
+
+    const platforms =
+      nestedMeta.platforms && typeof nestedMeta.platforms === 'object'
+        ? (nestedMeta.platforms as Record<string, unknown>)
+        : undefined;
+
+    const extractGameVersion = (platformKey: string): string | undefined => {
+      const p = platforms?.[platformKey];
+      if (!p || typeof p !== 'object') return undefined;
+      const builds = (p as Record<string, unknown>).game_builds;
+      if (!Array.isArray(builds) || builds.length === 0) return undefined;
+      const first = builds[0];
+      if (first && typeof first === 'object' && typeof (first as Record<string, unknown>).version === 'string') {
+        return (first as Record<string, unknown>).version as string;
+      }
+      return undefined;
+    };
+
+    const targetMcVersion =
+      (typeof nestedMeta.targetMcVersion === 'string' && nestedMeta.targetMcVersion) ||
+      extractGameVersion('android-client') ||
+      extractGameVersion('win-client');
+
+    return {
+      id:
+        (typeof nestedMeta.id === 'string' && nestedMeta.id) ||
+        (typeof nestedMeta.namespace === 'string' && nestedMeta.namespace) ||
+        undefined,
+      name: typeof nestedMeta.name === 'string' ? nestedMeta.name : undefined,
+      version: typeof nestedMeta.version === 'string' ? nestedMeta.version : undefined,
+      author: typeof nestedMeta.author === 'string' ? nestedMeta.author : undefined,
+      description: typeof nestedMeta.description === 'string' ? nestedMeta.description : undefined,
+      libraryFile: typeof raw.libraryFile === 'string' ? raw.libraryFile : undefined,
+      targetMcVersion,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function createInitialLauncherState(): LauncherState {
   const runtimes: RuntimeEntry[] = [
     {
@@ -104,6 +180,7 @@ export function createInitialLauncherState(): LauncherState {
       sizeKb: 142,
       dependencies: [],
     },
+    CREATE_BONUS_MOD,
   ];
 
   const profiles: ProfileEntry[] = [
@@ -355,6 +432,11 @@ export function evaluateLaunchReadiness(state: LauncherState): LaunchReadiness {
           warnings.push(`"${mod.name}" requiere la dependencia "${depId}" en el perfil activo.`);
         }
       }
+      if (mod.hasAndroidBinary === false) {
+        warnings.push(
+          `"${mod.name}" (.amethyst) contiene resource/behavior packs sin binario ELF .so para Android; se extraerán solo sus packs.`
+        );
+      }
       if (mod.targetMcVersion !== profile.mcVersion) {
         warnings.push(
           `"${mod.name}" apunta a MCBE ${mod.targetMcVersion} (perfil actual: ${profile.mcVersion}).`
@@ -535,10 +617,16 @@ export function loadLauncherState(): LauncherState {
     ) {
       mergedConfig.storagePath = '/Android/data/com.rubenamethyst.app/files';
     }
+    const loadedMods = parsed.mods.length > 0 ? parsed.mods : fallback.mods;
+    const hasBonus = loadedMods.some((m) => m.id === CREATE_BONUS_MOD.id || m.isBonus);
+    const mergedMods = hasBonus
+      ? loadedMods.map((m) => (m.id === CREATE_BONUS_MOD.id ? { ...CREATE_BONUS_MOD, ...m } : m))
+      : [...loadedMods, CREATE_BONUS_MOD];
+
     return {
       activeProfileId: parsed.activeProfileId || fallback.activeProfileId,
       profiles: parsed.profiles.length > 0 ? parsed.profiles : fallback.profiles,
-      mods: parsed.mods.length > 0 ? parsed.mods : fallback.mods,
+      mods: mergedMods,
       runtimes: Array.isArray(parsed.runtimes) && parsed.runtimes.length > 0 ? parsed.runtimes : fallback.runtimes,
       mcVersions: Array.isArray(parsed.mcVersions) && parsed.mcVersions.length > 0 ? parsed.mcVersions : fallback.mcVersions,
       config: mergedConfig,

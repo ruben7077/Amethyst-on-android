@@ -9,7 +9,10 @@ data class ModEntry(
     val libraryFile: String,
     val targetMcVersion: String,
     val localPath: String = "",
-    val sourceFormat: String = ".so"
+    val sourceFormat: String = ".so",
+    val isBonus: Boolean = false,
+    val hasAndroidBinary: Boolean = true,
+    val packDir: String = ""
 )
 
 data class ProfileEntry(

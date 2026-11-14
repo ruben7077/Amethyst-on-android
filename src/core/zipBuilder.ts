@@ -1,6 +1,6 @@
 export interface ZipInputFile {
   path: string;
-  content: string;
+  content: string | Uint8Array;
 }
 
 const CRC32_TABLE = (() => {
@@ -31,7 +31,8 @@ export function buildZipArchive(files: ZipInputFile[]): Uint8Array {
 
   for (const file of files) {
     const nameBytes = encoder.encode(file.path);
-    const dataBytes = encoder.encode(file.content);
+    const dataBytes =
+      typeof file.content === 'string' ? encoder.encode(file.content) : file.content;
     const crc = crc32(dataBytes);
 
     // Local file header (30 bytes + filename)

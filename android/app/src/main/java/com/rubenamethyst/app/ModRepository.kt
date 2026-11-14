@@ -1,6 +1,7 @@
 package com.rubenamethyst.app
 
 import android.content.ContentResolver
+import android.content.res.AssetManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import org.json.JSONArray
@@ -11,7 +12,8 @@ import java.util.zip.ZipInputStream
 class ModRepository(private val baseDir: File) {
     private val stateFile = File(baseDir, "launcher_state.json")
 
-    fun loadInitialState(): LauncherUiState {
+    fun loadInitialState(assets: AssetManager? = null): LauncherUiState {
+        var loadedState: LauncherUiState? = null
         if (stateFile.exists()) {
             try {
                 val root = JSONObject(stateFile.readText())
@@ -44,7 +46,10 @@ class ModRepository(private val baseDir: File) {
                                 libraryFile = obj.optString("libraryFile", "libmod.so"),
                                 targetMcVersion = obj.optString("targetMcVersion", "1.21.0.3"),
                                 localPath = obj.optString("localPath", ""),
-                                sourceFormat = obj.optString("sourceFormat", ".so")
+                                sourceFormat = obj.optString("sourceFormat", ".so"),
+                                isBonus = obj.optBoolean("isBonus", false),
+                                hasAndroidBinary = obj.optBoolean("hasAndroidBinary", true),
+                                packDir = obj.optString("packDir", "")
                             )
                         )
                     }
@@ -75,7 +80,7 @@ class ModRepository(private val baseDir: File) {
                 }
 
                 if (profiles.isNotEmpty()) {
-                    return LauncherUiState(
+                    loadedState = LauncherUiState(
                         activeProfileId = activeProfileId,
                         profiles = profiles,
                         mods = mods,
@@ -87,28 +92,51 @@ class ModRepository(private val baseDir: File) {
             }
         }
 
-        val defaultProfiles = listOf(
-            ProfileEntry(
-                id = "profile-amethyst-121",
-                name = "Amethyst 1.21",
-                mcVersion = "1.21.0.3",
-                runtimeId = "amethyst-1.3.1",
-                modIds = emptyList()
-            ),
-            ProfileEntry(
-                id = "profile-vanilla-121",
-                name = "Vanilla 1.21",
-                mcVersion = "1.21.2.2",
-                runtimeId = "vanilla",
-                modIds = emptyList()
-            )
-        )
-        return LauncherUiState(
+        val initialState = loadedState ?: LauncherUiState(
             activeProfileId = "profile-amethyst-121",
-            profiles = defaultProfiles,
+            profiles = listOf(
+                ProfileEntry(
+                    id = "profile-amethyst-121",
+                    name = "Amethyst 1.21",
+                    mcVersion = "1.21.0.3",
+                    runtimeId = "amethyst-1.3.1",
+                    modIds = emptyList()
+                ),
+                ProfileEntry(
+                    id = "profile-vanilla-121",
+                    name = "Vanilla 1.21",
+                    mcVersion = "1.21.2.2",
+                    runtimeId = "vanilla",
+                    modIds = emptyList()
+                )
+            ),
             mods = emptyList(),
             config = AndroidPortConfig()
         )
+
+        return ensureBonusModsSeeded(initialState, assets)
+    }
+
+    private fun ensureBonusModsSeeded(state: LauncherUiState, assets: AssetManager?): LauncherUiState {
+        if (assets == null) return state
+        if (state.mods.any { it.isBonus || it.id == "create" || it.id == "create-0-1-1" }) {
+            return state
+        }
+        return try {
+            val rawBytes = assets.open("bonus_mods/Create@0.1.1.amethyst").use { it.readBytes() }
+            val result = extractAndValidateModBytes(
+                displayName = "Create@0.1.1.amethyst",
+                rawBytes = rawBytes,
+                abi = state.config.targetAbi,
+                isBonus = true
+            )
+            val bonusMod = result.getOrNull() ?: return state
+            val updated = state.copy(mods = listOf(bonusMod) + state.mods)
+            persistState(updated)
+            updated
+        } catch (_: Exception) {
+            state
+        }
     }
 
     fun persistState(state: LauncherUiState) {
@@ -126,6 +154,9 @@ class ModRepository(private val baseDir: File) {
                     put("targetMcVersion", mod.targetMcVersion)
                     put("localPath", mod.localPath)
                     put("sourceFormat", mod.sourceFormat)
+                    put("isBonus", mod.isBonus)
+                    put("hasAndroidBinary", mod.hasAndroidBinary)
+                    put("packDir", mod.packDir)
                 }
             )
         }
@@ -166,6 +197,8 @@ class ModRepository(private val baseDir: File) {
                     put("libraryFile", mod.libraryFile)
                     put("localPath", mod.localPath)
                     put("abi", mod.abi)
+                    put("hasAndroidBinary", mod.hasAndroidBinary)
+                    put("packDir", mod.packDir)
                 }
             )
         }
@@ -208,6 +241,43 @@ class ModRepository(private val baseDir: File) {
     fun extractAndValidateMod(resolver: ContentResolver, uri: Uri, abi: String): Result<ModEntry> {
         return try {
             val displayName = resolveFileName(resolver, uri)
+            val rawBytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return Result.failure(IllegalStateException("No se pudo leer el archivo $displayName."))
+            extractAndValidateModBytes(displayName, rawBytes, abi, isBonus = false)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun parseModMetadata(rawMeta: JSONObject?): Map<String, String> {
+        if (rawMeta == null) return emptyMap()
+        val metaObj = rawMeta.optJSONObject("meta") ?: rawMeta
+        val map = mutableMapOf<String, String>()
+        metaObj.optString("name").takeIf { it.isNotBlank() }?.let { map["name"] = it }
+        metaObj.optString("version").takeIf { it.isNotBlank() }?.let { map["version"] = it }
+        metaObj.optString("author").takeIf { it.isNotBlank() }?.let { map["author"] = it }
+        metaObj.optString("namespace").takeIf { it.isNotBlank() }?.let { map["id"] = it }
+        metaObj.optString("id").takeIf { it.isNotBlank() }?.let { map["id"] = it }
+        metaObj.optString("targetMcVersion").takeIf { it.isNotBlank() }?.let { map["targetMcVersion"] = it }
+
+        val platforms = metaObj.optJSONObject("platforms")
+        val androidBuild = platforms?.optJSONObject("android-client")?.optJSONArray("game_builds")?.optJSONObject(0)
+        val winBuild = platforms?.optJSONObject("win-client")?.optJSONArray("game_builds")?.optJSONObject(0)
+        val mcVer = androidBuild?.optString("version")?.takeIf { it.isNotBlank() }
+            ?: winBuild?.optString("version")?.takeIf { it.isNotBlank() }
+        if (!mcVer.isNullOrBlank()) {
+            map["targetMcVersion"] = mcVer
+        }
+        return map
+    }
+
+    fun extractAndValidateModBytes(
+        displayName: String,
+        rawBytes: ByteArray,
+        abi: String,
+        isBonus: Boolean = false
+    ): Result<ModEntry> {
+        return try {
             val lower = displayName.lowercase()
             if (
                 !lower.endsWith(".amethyst") &&
@@ -220,14 +290,11 @@ class ModRepository(private val baseDir: File) {
                 )
             }
 
-            val modsRoot = File(baseDir, "mods").apply { mkdirs() }
-            val rawBytes = resolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: return Result.failure(IllegalStateException("No se pudo leer el archivo $displayName."))
-
             if (rawBytes.isEmpty()) {
                 return Result.failure(IllegalArgumentException("El archivo $displayName está vacío."))
             }
 
+            val modsRoot = File(baseDir, "mods").apply { mkdirs() }
             val isZip = rawBytes.size >= 2 && rawBytes[0] == 0x50.toByte() && rawBytes[1] == 0x4B.toByte()
             val isElf = rawBytes.size >= 4 &&
                 rawBytes[0] == 0x7F.toByte() &&
@@ -246,33 +313,40 @@ class ModRepository(private val baseDir: File) {
             val modDir = File(modsRoot, baseId).apply { mkdirs() }
 
             if (isZip) {
-                var parsedMeta: JSONObject? = null
+                var parsedMetaJson: JSONObject? = null
                 var preferredSo: File? = null
                 var fallbackSo: File? = null
+                var dllFile: File? = null
+                var hasPacks = false
 
                 ZipInputStream(rawBytes.inputStream()).use { zis ->
                     var entry = zis.nextEntry
                     while (entry != null) {
-                        val entryName = entry.name
-                        if (!entry.isDirectory && !entryName.contains("..")) {
-                            val safeRel = entryName.trimStart('/')
+                        val normalizedName = entry.name.replace('\\', '/')
+                        if (!entry.isDirectory && !normalizedName.contains("..")) {
+                            val safeRel = normalizedName.trimStart('/')
                             val fileName = safeRel.substringAfterLast('/')
                             val outFile = File(modDir, safeRel)
                             outFile.parentFile?.mkdirs()
                             outFile.outputStream().use { zis.copyTo(it) }
 
+                            if (safeRel.startsWith("behavior_packs/") || safeRel.startsWith("resource_packs/")) {
+                                hasPacks = true
+                            }
                             if (fileName.equals("mod.json", ignoreCase = true) ||
                                 fileName.equals("manifest.json", ignoreCase = true)
                             ) {
-                                parsedMeta = runCatching { JSONObject(outFile.readText()) }.getOrNull()
+                                parsedMetaJson = runCatching { JSONObject(outFile.readText()) }.getOrNull()
                             } else if (fileName.endsWith(".so", ignoreCase = true)) {
                                 outFile.setReadable(true, false)
                                 outFile.setExecutable(true, false)
-                                if (entryName.contains(abi, ignoreCase = true)) {
+                                if (normalizedName.contains(abi, ignoreCase = true)) {
                                     preferredSo = outFile
                                 } else if (fallbackSo == null) {
                                     fallbackSo = outFile
                                 }
+                            } else if (fileName.endsWith(".dll", ignoreCase = true)) {
+                                dllFile = outFile
                             }
                         }
                         zis.closeEntry()
@@ -281,18 +355,23 @@ class ModRepository(private val baseDir: File) {
                 }
 
                 val targetSo = preferredSo ?: fallbackSo
-                    ?: return Result.failure(
-                        IllegalStateException("El paquete $displayName no contiene ninguna librería nativa (.so) para Android.")
+                if (targetSo == null && !hasPacks && dllFile == null) {
+                    return Result.failure(
+                        IllegalStateException("El paquete $displayName no contiene librerías (.so) ni packs válidos de Amethyst.")
                     )
+                }
 
-                val meta = parsedMeta
-                val modName = meta?.optString("name")?.takeIf { it.isNotBlank() }
-                    ?: displayName.substringBeforeLast(".").replace('_', ' ')
-                val modVersion = meta?.optString("version")?.takeIf { it.isNotBlank() } ?: "1.0.0"
-                val modAuthor = meta?.optString("author")?.takeIf { it.isNotBlank() } ?: "AmethystMod"
-                val modTargetMc = meta?.optString("targetMcVersion")?.takeIf { it.isNotBlank() } ?: "1.21.0.3"
-                val modId = (meta?.optString("id")?.takeIf { it.isNotBlank() } ?: baseId)
-                    .lowercase().replace(Regex("[^a-z0-9-]+"), "-")
+                val parsed = parseModMetadata(parsedMetaJson)
+                val modName = parsed["name"] ?: displayName.substringBeforeLast(".").replace('_', ' ')
+                val modVersion = parsed["version"] ?: "1.0.0"
+                val modAuthor = parsed["author"] ?: "AmethystMod"
+                val modTargetMc = parsed["targetMcVersion"] ?: "1.21.0.3"
+                val modId = (parsed["id"] ?: baseId).lowercase().replace(Regex("[^a-z0-9-]+"), "-")
+
+                val hasAndroidBinary = targetSo != null
+                val libDisplay = targetSo?.name
+                    ?: dllFile?.let { "${it.name} (Windows)" }
+                    ?: "$baseId-packs"
 
                 return Result.success(
                     ModEntry(
@@ -301,10 +380,13 @@ class ModRepository(private val baseDir: File) {
                         version = modVersion,
                         author = modAuthor,
                         abi = abi,
-                        libraryFile = targetSo.name,
+                        libraryFile = libDisplay,
                         targetMcVersion = modTargetMc,
-                        localPath = targetSo.absolutePath,
-                        sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".zip"
+                        localPath = targetSo?.absolutePath ?: "",
+                        sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".zip",
+                        isBonus = isBonus,
+                        hasAndroidBinary = hasAndroidBinary,
+                        packDir = modDir.absolutePath
                     )
                 )
             }
@@ -326,26 +408,33 @@ class ModRepository(private val baseDir: File) {
                         libraryFile = outSo.name,
                         targetMcVersion = "1.21.0.3",
                         localPath = outSo.absolutePath,
-                        sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".so"
+                        sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".so",
+                        isBonus = isBonus,
+                        hasAndroidBinary = true,
+                        packDir = modDir.absolutePath
                     )
                 )
             }
 
-            // Manifiesto JSON suelto (.json o .amethyst JSON)
-            val meta = JSONObject(rawBytes.toString(Charsets.UTF_8))
-            val libName = meta.optString("libraryFile", "lib${baseId.replace('-', '_')}.so")
+            val rawJson = JSONObject(rawBytes.toString(Charsets.UTF_8))
+            val parsed = parseModMetadata(rawJson)
+            val modId = (parsed["id"] ?: baseId).lowercase().replace(Regex("[^a-z0-9-]+"), "-")
+            val libName = rawJson.optString("libraryFile", "lib${modId.replace('-', '_')}.so")
             val placeholderSo = File(modDir, libName)
             return Result.success(
                 ModEntry(
-                    id = meta.optString("id", baseId),
-                    name = meta.optString("name", baseId),
-                    version = meta.optString("version", "1.0.0"),
-                    author = meta.optString("author", "AmethystMod"),
-                    abi = meta.optString("abi", abi),
+                    id = modId,
+                    name = parsed["name"] ?: baseId,
+                    version = parsed["version"] ?: "1.0.0",
+                    author = parsed["author"] ?: "AmethystMod",
+                    abi = rawJson.optString("abi", abi),
                     libraryFile = libName,
-                    targetMcVersion = meta.optString("targetMcVersion", "1.21.0.3"),
+                    targetMcVersion = parsed["targetMcVersion"] ?: "1.21.0.3",
                     localPath = if (placeholderSo.exists()) placeholderSo.absolutePath else "",
-                    sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".json"
+                    sourceFormat = if (lower.endsWith(".amethyst")) ".amethyst" else ".json",
+                    isBonus = isBonus,
+                    hasAndroidBinary = placeholderSo.exists(),
+                    packDir = modDir.absolutePath
                 )
             )
         } catch (e: Exception) {
