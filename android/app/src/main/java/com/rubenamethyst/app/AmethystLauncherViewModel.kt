@@ -18,8 +18,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
-    private val repository = ModRepository(app.getExternalFilesDir(null) ?: app.filesDir)
-    private val _uiState = MutableStateFlow(repository.loadInitialState(app.assets))
+    private val repository = ModRepository(
+        baseDir = app.getExternalFilesDir(null) ?: app.filesDir,
+        appNativeLibDir = app.applicationInfo.nativeLibraryDir ?: ""
+    )
+    private val _uiState = MutableStateFlow(
+        repository.loadInitialState(app.assets, detectDeviceAbi())
+    )
     val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()
 
     init {
@@ -72,6 +77,21 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
         repository.persistState(_uiState.value)
     }
 
+    fun deleteMod(modId: String) {
+        val mod = _uiState.value.mods.firstOrNull { it.id == modId } ?: return
+        if (mod.isBonus) return
+        val updatedMods = _uiState.value.mods.filterNot { it.id == modId }
+        val updatedProfiles = _uiState.value.profiles.map { p ->
+            p.copy(modIds = p.modIds - modId)
+        }
+        _uiState.value = _uiState.value.copy(
+            mods = updatedMods,
+            profiles = updatedProfiles,
+            statusMessage = "Mod eliminado: ${mod.name}"
+        )
+        repository.persistState(_uiState.value)
+    }
+
     fun updateConfig(config: AndroidPortConfig) {
         _uiState.value = _uiState.value.copy(config = config)
         repository.persistState(_uiState.value)
@@ -81,7 +101,6 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
         val state = _uiState.value
         val profile = state.activeProfile ?: return
 
-        // Si el perfil es Vanilla, abre Minecraft Bedrock directamente
         if (profile.runtimeId == "vanilla") {
             val vanillaIntent = context.packageManager.getLaunchIntentForPackage(state.config.packageName)
             if (vanillaIntent != null) {
@@ -95,7 +114,6 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // Perfil Amethyst moddeado: preparar manifiesto y abrir AmethystGameActivity (nunca abrir Vanilla en silencio)
         val configDir = File(context.getExternalFilesDir(null), "runtime_bridge")
         configDir.mkdirs()
         repository.writeRuntimeManifest(
@@ -116,8 +134,14 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
             .toTypedArray()
 
         val packNotices = state.activeMods
-            .filter { !it.hasAndroidBinary }
-            .map { "${it.name} v${it.version} (${it.libraryFile}): packs extraídos en ${it.packDir}" }
+            .filter { it.packDir.isNotBlank() }
+            .map { "${it.name} v${it.version}: ${it.packDir}" }
+            .toTypedArray()
+
+        val packDirs = state.activeMods
+            .map { it.packDir }
+            .filter { it.isNotBlank() }
+            .distinct()
             .toTypedArray()
 
         val hostIntent = Intent(context, AmethystGameActivity::class.java).apply {
@@ -128,6 +152,7 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
             putExtra("amethyst_runtime_so", state.config.runtimePath)
             putExtra("amethyst_mod_paths", modPaths)
             putExtra("amethyst_pack_notices", packNotices)
+            putExtra("amethyst_pack_dirs", packDirs)
         }
         context.startActivity(hostIntent)
     }

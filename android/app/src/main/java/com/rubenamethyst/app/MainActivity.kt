@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
                                 state = uiState,
                                 onSelectProfile = viewModel::selectProfile,
                                 onLaunchGame = { viewModel.launchMinecraft(this@MainActivity) },
+                                onOpenMods = { currentRoute = "mods" },
                                 onDismissStatus = viewModel::clearStatusMessage
                             )
                             "profiles" -> ProfilesScreen(
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
                             "mods" -> ModsScreen(
                                 state = uiState,
                                 onToggleMod = viewModel::toggleModForActiveProfile,
+                                onDeleteMod = viewModel::deleteMod,
                                 onImportClick = { importModLauncher.launch(arrayOf("*/*")) },
                                 onImportRuntimeClick = { importRuntimeLauncher.launch(arrayOf("*/*")) },
                                 onDismissStatus = viewModel::clearStatusMessage

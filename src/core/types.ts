@@ -19,7 +19,6 @@ export enum LauncherTab {
   LAUNCHER = 'launcher',
   PROFILES = 'profiles',
   MODS = 'mods',
-  PORT = 'port',
   SETTINGS = 'settings',
 }
 

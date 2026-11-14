@@ -8,13 +8,13 @@ import { LauncherView } from './components/LauncherView';
 import { ModsView } from './components/ModsView';
 import { NavigationShell } from './components/NavigationShell';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { PortArchitectureView } from './components/PortArchitectureView';
 import { ProfilesView } from './components/ProfilesView';
 import { SettingsView } from './components/SettingsView';
 import {
   createInitialLauncherState,
   loadLauncherState,
   saveLauncherState,
+  setProfileMods,
   toggleModInProfile,
 } from './core/launcherLogic';
 import {
@@ -84,6 +84,29 @@ export default function App() {
       ...prev,
       profiles: toggleModInProfile(prev.profiles, prev.activeProfileId, modId),
     }));
+  }, []);
+
+  const handleSetActiveProfileMods = useCallback((modIds: string[]) => {
+    setState((prev) => ({
+      ...prev,
+      profiles: setProfileMods(prev.profiles, prev.activeProfileId, modIds),
+    }));
+  }, []);
+
+  const handleDuplicateProfile = useCallback((profile: ProfileEntry) => {
+    setState((prev) => {
+      const copy: ProfileEntry = {
+        ...profile,
+        id: `profile-${Date.now().toString(36)}`,
+        name: `${profile.name} (Copia)`,
+        lastPlayed: 'Sin iniciar aún',
+      };
+      return {
+        ...prev,
+        profiles: [copy, ...prev.profiles],
+        activeProfileId: copy.id,
+      };
+    });
   }, []);
 
   const handleImportMod = useCallback((mod: ModEntry) => {
@@ -172,6 +195,8 @@ export default function App() {
         <LauncherView
           state={state}
           onSelectProfile={handleSelectProfile}
+          onToggleMod={handleToggleMod}
+          onOpenImportMod={handlePrimaryHeaderAction}
           onInstallMissingTarget={handleInstallMissingTarget}
           onNavigateTab={setActiveTab}
           onRecordPlay={handleRecordPlay}
@@ -186,6 +211,7 @@ export default function App() {
             setActiveTab(LauncherTab.LAUNCHER);
           }}
           onSaveProfile={handleSaveProfile}
+          onDuplicateProfile={handleDuplicateProfile}
           onDeleteProfile={handleDeleteProfile}
         />
       )}
@@ -194,6 +220,7 @@ export default function App() {
         <ModsView
           state={state}
           onToggleMod={handleToggleMod}
+          onSetProfileMods={handleSetActiveProfileMods}
           onImportMod={handleImportMod}
           onDeleteMod={handleDeleteMod}
           onToggleRuntimeInstalled={handleToggleRuntimeInstalled}
@@ -201,8 +228,6 @@ export default function App() {
           onSetImportModalOpen={setImportModalOpen}
         />
       )}
-
-      {activeTab === LauncherTab.PORT && <PortArchitectureView />}
 
       {activeTab === LauncherTab.SETTINGS && (
         <SettingsView

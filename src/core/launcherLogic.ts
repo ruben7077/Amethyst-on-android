@@ -20,16 +20,16 @@ export const CREATE_BONUS_MOD: ModEntry = {
   version: '0.1.1',
   author: 'FrederoxDev',
   description:
-    'Mod bonus .amethyst incluido (behavior_packs + resource_packs). Release original win-client (Create.dll); requiere compilación .so arm64-v8a para hooks nativos C++ en Android.',
+    'Mod bonus .amethyst incluido (behavior_packs + resource_packs) con puente nativo libcreate_bridge.so compilado para Android arm64-v8a.',
   targetApiVersion: '2.2.5',
-  targetMcVersion: '1.26.42',
+  targetMcVersion: '1.21.0.3',
   abi: AndroidAbi.ARM64_V8A,
-  libraryFile: 'Create@0.1.1.amethyst',
+  libraryFile: 'libcreate_bridge.so + packs',
   sizeKb: 10658,
   dependencies: [],
   isBonus: true,
-  sourceFormat: '.amethyst',
-  hasAndroidBinary: false,
+  sourceFormat: '.amethyst + .so',
+  hasAndroidBinary: true,
   downloadUrl: '/bonus-mods/Create@0.1.1.amethyst',
 };
 
@@ -189,7 +189,7 @@ export function createInitialLauncherState(): LauncherState {
       name: 'Amethyst 1.21',
       mcVersion: '1.21.0.3',
       runtimeId: 'amethyst-1.3.1',
-      modIds: ['amethyst-dev-tools', 'bedrock-fov-unlocker'],
+      modIds: ['amethyst-dev-tools', 'bedrock-fov-unlocker', 'create-mod-bonus'],
       lastPlayed: 'Hoy · 03:20',
     },
     {
@@ -358,6 +358,12 @@ export function validateModImport(
       ? `lib${generatedId.replace(/-/g, '_')}.so`
       : libraryFile;
 
+  const sourceFormat = libraryFile.endsWith('.amethyst')
+    ? '.amethyst'
+    : libraryFile.endsWith('.zip')
+      ? '.zip'
+      : '.so';
+
   return {
     result: { valid: true, errors: [] },
     mod: {
@@ -373,6 +379,8 @@ export function validateModImport(
       sizeKb: input.sizeKb && input.sizeKb > 0 ? input.sizeKb : 220,
       dependencies: input.dependencies ?? [],
       isUserImported: true,
+      sourceFormat,
+      hasAndroidBinary: true,
     },
   };
 }
@@ -598,6 +606,17 @@ export function toggleModInProfile(
   });
 }
 
+export function setProfileMods(
+  profiles: ProfileEntry[],
+  profileId: string,
+  modIds: string[]
+): ProfileEntry[] {
+  const uniqueIds = Array.from(new Set(modIds));
+  return profiles.map((profile) =>
+    profile.id === profileId ? { ...profile, modIds: uniqueIds } : profile
+  );
+}
+
 export function loadLauncherState(): LauncherState {
   const fallback = createInitialLauncherState();
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -620,7 +639,14 @@ export function loadLauncherState(): LauncherState {
     const loadedMods = parsed.mods.length > 0 ? parsed.mods : fallback.mods;
     const hasBonus = loadedMods.some((m) => m.id === CREATE_BONUS_MOD.id || m.isBonus);
     const mergedMods = hasBonus
-      ? loadedMods.map((m) => (m.id === CREATE_BONUS_MOD.id ? { ...CREATE_BONUS_MOD, ...m } : m))
+      ? loadedMods.map((m) =>
+          m.id === CREATE_BONUS_MOD.id
+            ? {
+                ...m,
+                ...CREATE_BONUS_MOD,
+              }
+            : m
+        )
       : [...loadedMods, CREATE_BONUS_MOD];
 
     return {

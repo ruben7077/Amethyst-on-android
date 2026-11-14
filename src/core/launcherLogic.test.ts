@@ -11,12 +11,13 @@ import {
   filterMods,
   filterProfiles,
   parseAmethystModJson,
+  setProfileMods,
   toggleModInProfile,
   validateModImport,
   validateProfileInput,
 } from './launcherLogic';
-import { AndroidAbi, RuntimeType } from './types';
-import { buildZipArchive } from './zipBuilder';
+import { AndroidAbi, LauncherTab, RuntimeType } from './types';
+import { buildZipArchive, scanAmethystArchive } from './zipBuilder';
 
 test('validateProfileInput rejects empty or duplicate names', () => {
   const state = createInitialLauncherState();
@@ -101,7 +102,7 @@ test('evaluateLaunchReadiness detects ABI mismatch and generates launch sequence
   const readiness = evaluateLaunchReadiness(state);
 
   assert.equal(readiness.ready, true);
-  assert.equal(readiness.activeModList.length, 2);
+  assert.equal(readiness.activeModList.length, 3);
 
   const steps = buildLaunchSequence(state, readiness);
   assert.ok(steps.length >= 4);
@@ -150,6 +151,11 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
 
   const runtimeCpp = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/amethyst_runtime.cpp');
   assert.ok(runtimeCpp?.content.includes('Amethyst_InitRuntime'));
+  const modsCpp = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/amethyst_mods.cpp');
+  assert.ok(modsCpp?.content.includes('Amethyst_RegisterMod'));
+  const cmakeFile = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/CMakeLists.txt');
+  assert.ok(cmakeFile?.content.includes('create_bridge'));
+  assert.ok(cmakeFile?.content.includes('amethyst_dev_overlay'));
   const loaderCpp = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/amethyst_loader.cpp');
   assert.ok(loaderCpp?.content.includes('PreloadSiblingLibraries'));
   assert.ok(loaderCpp?.content.includes('MC_PAIRIP'));
@@ -158,6 +164,11 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
   );
   assert.ok(gameActivity?.content.includes('safeDrawingPadding'));
   assert.ok(gameActivity?.content.includes('Dispatchers.IO'));
+  assert.ok(gameActivity?.content.includes('FileProvider.getUriForFile'));
+  const filePathsXml = ANDROID_PORT_FILES.find(
+    (f) => f.path === 'app/src/main/res/xml/file_paths.xml'
+  );
+  assert.ok(filePathsXml?.content.includes('external-files-path'));
 
   const zipBytes = buildZipArchive([
     ...ANDROID_PORT_FILES.map((f) => ({ path: `android/${f.path}`, content: f.content })),
@@ -206,4 +217,39 @@ test('CREATE_BONUS_MOD and parseAmethystModJson support Amethyst 1.3.0 Create@0.
   assert.equal(parsed.author, 'FrederoxDev');
   assert.equal(parsed.id, 'create');
   assert.equal(parsed.targetMcVersion, '1.26.42');
+});
+
+test('LauncherTab omits PORT, setProfileMods updates bulk mods, and scanAmethystArchive extracts mod.json', async () => {
+  const tabs = Object.values(LauncherTab);
+  assert.deepEqual(tabs, ['launcher', 'profiles', 'mods', 'settings']);
+
+  const state = createInitialLauncherState();
+  const cleared = setProfileMods(state.profiles, 'profile-amethyst-121', []);
+  assert.equal(
+    cleared.find((p) => p.id === 'profile-amethyst-121')?.modIds.length,
+    0
+  );
+
+  const archiveBytes = buildZipArchive([
+    {
+      path: 'mod.json',
+      content: JSON.stringify({
+        meta: { name: 'MiniMap', version: '1.0.4', author: 'Ruben' },
+      }),
+    },
+    {
+      path: 'lib/arm64-v8a/libminimap.so',
+      content: new Uint8Array([0x7f, 0x45, 0x4c, 0x46]),
+    },
+    {
+      path: 'behavior_packs/minimap/manifest.json',
+      content: '{}',
+    },
+  ]);
+
+  const scanned = await scanAmethystArchive(archiveBytes);
+  assert.ok(scanned);
+  assert.equal(scanned.hasPacks, true);
+  assert.deepEqual(scanned.soLibraries, ['lib/arm64-v8a/libminimap.so']);
+  assert.ok(scanned.modJsonText?.includes('MiniMap'));
 });

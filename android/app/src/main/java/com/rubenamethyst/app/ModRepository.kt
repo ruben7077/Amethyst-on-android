@@ -7,12 +7,66 @@ import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
-class ModRepository(private val baseDir: File) {
+class ModRepository(
+    private val baseDir: File,
+    private val appNativeLibDir: String = ""
+) {
     private val stateFile = File(baseDir, "launcher_state.json")
 
-    fun loadInitialState(assets: AssetManager? = null): LauncherUiState {
+    private fun builtInNativeMods(abi: String): List<ModEntry> {
+        fun nativePath(soName: String): String {
+            if (appNativeLibDir.isBlank()) return ""
+            val candidate = File(appNativeLibDir, soName)
+            return if (candidate.exists()) candidate.absolutePath else "$appNativeLibDir/$soName"
+        }
+        return listOf(
+            ModEntry(
+                id = "amethyst-dev-tools",
+                name = "Amethyst Dev Overlay",
+                version = "1.4.0",
+                author = "FrederoxDev",
+                abi = abi,
+                libraryFile = "libamethyst_dev_overlay.so",
+                targetMcVersion = "1.21.0.3",
+                localPath = nativePath("libamethyst_dev_overlay.so"),
+                sourceFormat = ".so",
+                isBonus = false,
+                hasAndroidBinary = true
+            ),
+            ModEntry(
+                id = "bedrock-fov-unlocker",
+                name = "Dynamic FOV & Camera",
+                version = "2.1.0",
+                author = "AmethystCommunity",
+                abi = abi,
+                libraryFile = "libdynamic_fov.so",
+                targetMcVersion = "1.21.0.3",
+                localPath = nativePath("libdynamic_fov.so"),
+                sourceFormat = ".so",
+                isBonus = false,
+                hasAndroidBinary = true
+            ),
+            ModEntry(
+                id = "chunk-border-renderer",
+                name = "Chunk Border Renderer",
+                version = "1.1.2",
+                author = "VoxelPort",
+                abi = abi,
+                libraryFile = "libchunk_borders.so",
+                targetMcVersion = "1.21.2.2",
+                localPath = nativePath("libchunk_borders.so"),
+                sourceFormat = ".so",
+                isBonus = false,
+                hasAndroidBinary = true
+            )
+        )
+    }
+
+    fun loadInitialState(assets: AssetManager? = null, deviceAbi: String = "arm64-v8a"): LauncherUiState {
         var loadedState: LauncherUiState? = null
         if (stateFile.exists()) {
             try {
@@ -21,14 +75,14 @@ class ModRepository(private val baseDir: File) {
                 val cfgObj = root.optJSONObject("config")
                 val config = if (cfgObj != null) {
                     AndroidPortConfig(
-                        targetAbi = cfgObj.optString("targetAbi", "arm64-v8a"),
+                        targetAbi = cfgObj.optString("targetAbi", deviceAbi),
                         packageName = cfgObj.optString("packageName", "com.mojang.minecraftpe"),
                         storagePath = cfgObj.optString("storagePath", "/Android/data/com.rubenamethyst.app/files"),
                         runtimePath = cfgObj.optString("runtimePath", ""),
                         verifyAbiOnLaunch = cfgObj.optBoolean("verifyAbiOnLaunch", true)
                     )
                 } else {
-                    AndroidPortConfig()
+                    AndroidPortConfig(targetAbi = deviceAbi)
                 }
 
                 val modsArr = root.optJSONArray("mods")
@@ -42,7 +96,7 @@ class ModRepository(private val baseDir: File) {
                                 name = obj.getString("name"),
                                 version = obj.optString("version", "1.0.0"),
                                 author = obj.optString("author", "Desconocido"),
-                                abi = obj.optString("abi", "arm64-v8a"),
+                                abi = obj.optString("abi", deviceAbi),
                                 libraryFile = obj.optString("libraryFile", "libmod.so"),
                                 targetMcVersion = obj.optString("targetMcVersion", "1.21.0.3"),
                                 localPath = obj.optString("localPath", ""),
@@ -100,7 +154,7 @@ class ModRepository(private val baseDir: File) {
                     name = "Amethyst 1.21",
                     mcVersion = "1.21.0.3",
                     runtimeId = "amethyst-1.3.1",
-                    modIds = emptyList()
+                    modIds = listOf("amethyst-dev-tools", "bedrock-fov-unlocker", "create")
                 ),
                 ProfileEntry(
                     id = "profile-vanilla-121",
@@ -110,54 +164,99 @@ class ModRepository(private val baseDir: File) {
                     modIds = emptyList()
                 )
             ),
-            mods = emptyList(),
-            config = AndroidPortConfig()
+            mods = builtInNativeMods(deviceAbi),
+            config = AndroidPortConfig(targetAbi = deviceAbi)
         )
 
-        return ensureBonusModsSeeded(initialState, assets)
+        return ensureBuiltInAndBonusMods(initialState, assets)
     }
 
-    private fun ensureBonusModsSeeded(state: LauncherUiState, assets: AssetManager?): LauncherUiState {
-        if (assets == null) return state
-        val staleCreate = state.mods.firstOrNull {
+    private fun ensureBuiltInAndBonusMods(state: LauncherUiState, assets: AssetManager?): LauncherUiState {
+        var changed = false
+        val nativeDefaults = builtInNativeMods(state.config.targetAbi)
+        val mergedMods = state.mods.toMutableList()
+
+        for (nativeMod in nativeDefaults) {
+            val existingIdx = mergedMods.indexOfFirst { it.id == nativeMod.id }
+            if (existingIdx < 0) {
+                mergedMods.add(nativeMod)
+                changed = true
+            } else if (mergedMods[existingIdx].localPath != nativeMod.localPath && nativeMod.localPath.isNotBlank()) {
+                mergedMods[existingIdx] = mergedMods[existingIdx].copy(
+                    localPath = nativeMod.localPath,
+                    hasAndroidBinary = true
+                )
+                changed = true
+            }
+        }
+
+        val staleCreate = mergedMods.firstOrNull {
             (it.id == "create-0-1-1" || it.name.startsWith("Create@")) && it.version == "1.0.0"
         }
-        val alreadyHasCleanBonus = state.mods.any { it.isBonus && it.version != "1.0.0" }
-        if (alreadyHasCleanBonus && staleCreate == null) {
-            return state
+        val createBridgePath = if (appNativeLibDir.isNotBlank()) {
+            File(appNativeLibDir, "libcreate_bridge.so").absolutePath
+        } else {
+            ""
         }
-        return try {
-            val rawBytes = assets.open("bonus_mods/Create@0.1.1.amethyst").use { it.readBytes() }
-            val result = extractAndValidateModBytes(
-                displayName = "Create@0.1.1.amethyst",
-                rawBytes = rawBytes,
-                abi = state.config.targetAbi,
-                isBonus = true
-            )
-            val bonusMod = result.getOrNull() ?: return state
-            val cleanedMods = state.mods.filterNot {
-                it.id == bonusMod.id || it.id == "create-0-1-1" || it.name.startsWith("Create@")
-            }
-            val cleanedProfiles = if (staleCreate != null) {
-                state.profiles.map { profile ->
-                    if (profile.modIds.contains(staleCreate.id)) {
-                        profile.copy(modIds = (profile.modIds - staleCreate.id + bonusMod.id).distinct())
-                    } else {
-                        profile
+
+        val existingCreate = mergedMods.firstOrNull { it.id == "create" }
+        var updatedProfiles = state.profiles
+
+        if (assets != null && (existingCreate == null || staleCreate != null || existingCreate.localPath.isBlank())) {
+            val rawBytes = runCatching {
+                assets.open("bonus_mods/Create@0.1.1.amethyst").use { it.readBytes() }
+            }.getOrNull()
+
+            if (rawBytes != null) {
+                val extracted = extractAndValidateModBytes(
+                    displayName = "Create@0.1.1.amethyst",
+                    rawBytes = rawBytes,
+                    abi = state.config.targetAbi,
+                    isBonus = true
+                ).getOrNull()
+
+                if (extracted != null) {
+                    val readyCreate = extracted.copy(
+                        localPath = createBridgePath,
+                        hasAndroidBinary = createBridgePath.isNotBlank(),
+                        libraryFile = if (createBridgePath.isNotBlank()) "libcreate_bridge.so + packs" else extracted.libraryFile
+                    )
+                    mergedMods.removeAll { it.id == readyCreate.id || it.id == "create-0-1-1" || it.name.startsWith("Create@") }
+                    mergedMods.add(0, readyCreate)
+                    if (staleCreate != null) {
+                        updatedProfiles = updatedProfiles.map { profile ->
+                            if (profile.modIds.contains(staleCreate.id)) {
+                                profile.copy(modIds = (profile.modIds - staleCreate.id + readyCreate.id).distinct())
+                            } else {
+                                profile
+                            }
+                        }
                     }
+                    changed = true
                 }
-            } else {
-                state.profiles
             }
-            val updated = state.copy(
-                mods = listOf(bonusMod) + cleanedMods,
-                profiles = cleanedProfiles
-            )
-            persistState(updated)
-            updated
-        } catch (_: Exception) {
-            state
         }
+
+        // Asegurar que el perfil Amethyst principal tenga los mods nativos activos si estaba vacío al actualizar
+        val mainProfile = updatedProfiles.firstOrNull { it.id == "profile-amethyst-121" }
+        if (mainProfile != null && mainProfile.modIds.none { id -> nativeDefaults.any { it.id == id } }) {
+            val defaultIds = listOf("amethyst-dev-tools", "bedrock-fov-unlocker", "create")
+                .filter { id -> mergedMods.any { it.id == id } }
+            updatedProfiles = updatedProfiles.map { p ->
+                if (p.id == "profile-amethyst-121") {
+                    p.copy(modIds = (p.modIds + defaultIds).distinct())
+                } else {
+                    p
+                }
+            }
+            changed = true
+        }
+
+        val finalState = state.copy(mods = mergedMods, profiles = updatedProfiles)
+        if (changed) {
+            persistState(finalState)
+        }
+        return finalState
     }
 
     fun persistState(state: LauncherUiState) {
@@ -230,6 +329,46 @@ class ModRepository(private val baseDir: File) {
             put("mods", modsArray)
         }
         targetFile.writeText(payload.toString(2))
+    }
+
+    fun buildMcAddonFromPacks(packDirs: List<String>): File? {
+        if (packDirs.isEmpty()) return null
+        val exportsDir = File(baseDir, "exports").apply { mkdirs() }
+        val outFile = File(exportsDir, "amethyst_active_packs.mcaddon")
+        var entriesWritten = 0
+
+        ZipOutputStream(outFile.outputStream().buffered()).use { zos ->
+            val seenPaths = mutableSetOf<String>()
+            packDirs.forEachIndexed { index, dirPath ->
+                val modDir = File(dirPath)
+                if (!modDir.exists()) return@forEachIndexed
+                val modSlug = modDir.name.ifBlank { "mod_$index" }
+
+                listOf("behavior_packs", "resource_packs").forEach { packCategory ->
+                    val categoryDir = File(modDir, packCategory)
+                    if (!categoryDir.isDirectory) return@forEach
+                    val subPacks = categoryDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+                    subPacks.forEach { packRoot ->
+                        val prefix = "${modSlug}_${packCategory.take(2)}_${packRoot.name}"
+                        packRoot.walkTopDown().filter { it.isFile && it.name != ".gitkeep" }.forEach { file ->
+                            val rel = file.relativeTo(packRoot).invariantSeparatorsPath
+                            val zipPath = "$prefix/$rel"
+                            if (seenPaths.add(zipPath)) {
+                                zos.putNextEntry(ZipEntry(zipPath))
+                                file.inputStream().use { it.copyTo(zos) }
+                                zos.closeEntry()
+                                entriesWritten++
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return if (entriesWritten > 0) outFile else {
+            outFile.delete()
+            null
+        }
     }
 
     private fun resolveFileName(resolver: ContentResolver, uri: Uri): String {
@@ -408,7 +547,7 @@ class ModRepository(private val baseDir: File) {
 
                 val hasAndroidBinary = targetSo != null
                 val libDisplay = targetSo?.name
-                    ?: dllFile?.let { "${it.name} (Windows)" }
+                    ?: dllFile?.let { "${it.name} (Packs listos)" }
                     ?: "$baseId-packs"
 
                 return Result.success(

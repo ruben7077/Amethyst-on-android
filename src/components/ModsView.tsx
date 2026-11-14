@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
-import { Download, Package, Plus, Search, Trash2, Upload, X } from 'lucide-react';
+import {
+  CheckCheck,
+  Download,
+  Package,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { filterMods, parseAmethystModJson, validateModImport } from '../core/launcherLogic';
 import {
   AndroidAbi,
@@ -7,10 +16,12 @@ import {
   ModEntry,
   RuntimeType,
 } from '../core/types';
+import { scanAmethystArchive } from '../core/zipBuilder';
 
 interface ModsViewProps {
   state: LauncherState;
   onToggleMod: (modId: string) => void;
+  onSetProfileMods: (modIds: string[]) => void;
   onImportMod: (mod: ModEntry) => void;
   onDeleteMod: (modId: string) => void;
   onToggleRuntimeInstalled: (runtimeId: string) => void;
@@ -18,9 +29,12 @@ interface ModsViewProps {
   onSetImportModalOpen: (open: boolean) => void;
 }
 
+type ModCategoryFilter = 'all' | 'active' | 'bonus' | 'imported';
+
 export const ModsView: React.FC<ModsViewProps> = ({
   state,
   onToggleMod,
+  onSetProfileMods,
   onImportMod,
   onDeleteMod,
   onToggleRuntimeInstalled,
@@ -28,6 +42,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
   onSetImportModalOpen,
 }) => {
   const [subTab, setSubTab] = useState<'mods' | 'runtimes'>('mods');
+  const [categoryFilter, setCategoryFilter] = useState<ModCategoryFilter>('all');
   const [query, setQuery] = useState('');
   const [abiFilter, setAbiFilter] = useState<AndroidAbi | 'all'>('all');
 
@@ -38,17 +53,32 @@ export const ModsView: React.FC<ModsViewProps> = ({
   const [modAbi, setModAbi] = useState<AndroidAbi>(state.config.targetAbi);
   const [modTargetMc, setModTargetMc] = useState('1.21.0.3');
   const [modDescription, setModDescription] = useState('');
+  const [modSizeKb, setModSizeKb] = useState<number>(220);
+  const [scanSummary, setScanSummary] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [importErrors, setImportErrors] = useState<string[]>([]);
 
   const activeProfile = state.profiles.find((p) => p.id === state.activeProfileId);
   const activeRuntime = state.runtimes.find((r) => r.id === activeProfile?.runtimeId);
   const isVanillaActive = activeRuntime?.type === RuntimeType.VANILLA;
 
-  const visibleMods = filterMods(state.mods, query, abiFilter);
+  const baseFiltered = filterMods(state.mods, query, abiFilter);
+  const visibleMods = baseFiltered.filter((mod) => {
+    if (categoryFilter === 'active') return Boolean(activeProfile?.modIds.includes(mod.id));
+    if (categoryFilter === 'bonus') return Boolean(mod.isBonus);
+    if (categoryFilter === 'imported') return Boolean(mod.isUserImported);
+    return true;
+  });
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const compatibleModIds = state.mods
+    .filter((m) => m.abi === state.config.targetAbi)
+    .map((m) => m.id);
+
+  const processUploadedFile = async (file: File) => {
+    setScanSummary(null);
+    setImportErrors([]);
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    setModSizeKb(sizeKb);
 
     if (file.name.endsWith('.json')) {
       try {
@@ -66,32 +96,88 @@ export const ModsView: React.FC<ModsViewProps> = ({
         if (parsed.libraryFile) {
           setModLibraryFile(parsed.libraryFile);
         } else if (parsed.name) {
-          setModLibraryFile(
-            `lib${parsed.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.so`
-          );
+          setModLibraryFile(`lib${parsed.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.so`);
         }
-        setImportErrors([]);
+        setScanSummary('Metadatos leídos desde mod.json.');
       } catch {
         setImportErrors(['El archivo mod.json no tiene un formato JSON válido.']);
       }
       return;
     }
 
-    if (
-      file.name.endsWith('.so') ||
-      file.name.endsWith('.zip') ||
-      file.name.endsWith('.amethyst')
-    ) {
-      const baseName = file.name
-        .replace(/\.(so|zip|amethyst)$/i, '')
-        .replace(/^lib/, '');
+    if (file.name.endsWith('.so')) {
+      const baseName = file.name.replace(/\.so$/i, '').replace(/^lib/, '');
       setModName(baseName.replace(/[_-]+/g, ' '));
-      setModLibraryFile(
-        file.name.endsWith('.so') ? file.name : `lib${baseName.replace(/[^a-z0-9_]+/gi, '_')}.so`
-      );
+      setModLibraryFile(file.name);
       setModAuthor('LocalImport');
-      setImportErrors([]);
+      setModDescription('Librería nativa ELF (.so) importada para AmethystRuntime.');
+      setScanSummary(`Librería ELF detectada (${sizeKb} KB).`);
+      return;
     }
+
+    if (file.name.endsWith('.amethyst') || file.name.endsWith('.zip')) {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const scan = await scanAmethystArchive(bytes);
+      const fallbackBase = file.name.replace(/\.(amethyst|zip)$/i, '').split('@')[0];
+
+      const rawMeta = scan?.modJsonText || scan?.manifestJsonText;
+      const parsed = rawMeta ? parseAmethystModJson(rawMeta) : null;
+
+      const resolvedName = parsed?.name || fallbackBase.replace(/[_-]+/g, ' ');
+      const slug = resolvedName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+      setModName(resolvedName);
+      if (parsed?.version) setModVersion(parsed.version);
+      setModAuthor(parsed?.author || 'AmethystMod');
+      if (parsed?.targetMcVersion) {
+        const known = state.mcVersions.some((v) => v.version === parsed.targetMcVersion);
+        if (known) setModTargetMc(parsed.targetMcVersion);
+      }
+
+      const detectedSo = scan?.soLibraries.find((p) => p.includes('arm64')) || scan?.soLibraries[0];
+      const soFileName = detectedSo
+        ? detectedSo.split('/').pop() || `lib${slug}.so`
+        : parsed?.libraryFile || `lib${slug}.so`;
+
+      setModLibraryFile(soFileName);
+
+      if (scan?.hasPacks && !detectedSo) {
+        setModDescription(
+          parsed?.description ||
+            `Paquete .amethyst con ${scan.entries.length} archivos (packs Bedrock + puente nativo Android).`
+        );
+      } else {
+        setModDescription(
+          parsed?.description || 'Mod .amethyst importado con soporte nativo Android.'
+        );
+      }
+
+      if (scan) {
+        setScanSummary(
+          `Archivo analizado: ${scan.entries.length} entradas · ${scan.soLibraries.length} .so · ${scan.hasPacks ? 'packs Bedrock detectados' : 'sin packs'}`
+        );
+      } else {
+        setScanSummary(`Archivo .amethyst preparado (${sizeKb} KB).`);
+      }
+      return;
+    }
+
+    setImportErrors(['Formato no compatible. Selecciona un archivo .amethyst, .so, .zip o mod.json.']);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processUploadedFile(file);
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await processUploadedFile(file);
   };
 
   const handleSubmitImport = (e: React.FormEvent) => {
@@ -106,6 +192,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
         targetMcVersion: modTargetMc,
         abi: modAbi,
         libraryFile: modLibraryFile,
+        sizeKb: modSizeKb,
       },
       state.mods
     );
@@ -117,9 +204,11 @@ export const ModsView: React.FC<ModsViewProps> = ({
 
     onImportMod(mod);
     setModName('');
+    setModVersion('1.0.0');
     setModAuthor('');
     setModLibraryFile('');
     setModDescription('');
+    setScanSummary(null);
     setImportErrors([]);
     onSetImportModalOpen(false);
   };
@@ -133,7 +222,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
             Mods y Runtimes
           </h1>
           <p className="mt-1 text-sm text-[#9B8FB8]">
-            Administra librerías nativas ELF (.so) de AmethystAPI para el perfil activo:{' '}
+            Administra mods .amethyst y librerías ELF (.so) para el perfil{' '}
             <strong className="text-white">{activeProfile?.name ?? 'Ninguno'}</strong>.
           </p>
         </div>
@@ -142,6 +231,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
           type="button"
           onClick={() => {
             setImportErrors([]);
+            setScanSummary(null);
             onSetImportModalOpen(true);
           }}
           className="min-h-[44px] px-5 py-2.5 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
@@ -152,38 +242,60 @@ export const ModsView: React.FC<ModsViewProps> = ({
       </div>
 
       {/* Sub-navigation & Filters */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div
-          role="tablist"
-          aria-label="Secciones de mods"
-          className="inline-flex items-center p-1 rounded-xl bg-[#13111C] border border-white/[0.08] self-start"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={subTab === 'mods'}
-            onClick={() => setSubTab('mods')}
-            className={`min-h-[36px] px-4 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-              subTab === 'mods' ? 'bg-[#8B5CF6] text-white' : 'text-[#9B8FB8] hover:text-white'
-            }`}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            role="tablist"
+            aria-label="Secciones de mods"
+            className="inline-flex items-center p-1 rounded-xl bg-[#13111C] border border-white/[0.08]"
           >
-            Mods (.so) · {state.mods.length}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={subTab === 'runtimes'}
-            onClick={() => setSubTab('runtimes')}
-            className={`min-h-[36px] px-4 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-              subTab === 'runtimes' ? 'bg-[#8B5CF6] text-white' : 'text-[#9B8FB8] hover:text-white'
-            }`}
-          >
-            Runtimes · {state.runtimes.length}
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={subTab === 'mods'}
+              onClick={() => setSubTab('mods')}
+              className={`min-h-[36px] px-4 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                subTab === 'mods' ? 'bg-[#8B5CF6] text-white' : 'text-[#9B8FB8] hover:text-white'
+              }`}
+            >
+              Mods · {state.mods.length}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={subTab === 'runtimes'}
+              onClick={() => setSubTab('runtimes')}
+              className={`min-h-[36px] px-4 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                subTab === 'runtimes' ? 'bg-[#8B5CF6] text-white' : 'text-[#9B8FB8] hover:text-white'
+              }`}
+            >
+              Runtimes · {state.runtimes.length}
+            </button>
+          </div>
+
+          {subTab === 'mods' && !isVanillaActive && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSetProfileMods(compatibleModIds)}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-xs font-medium text-[#EDE9F6] flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              >
+                <CheckCheck className="w-3.5 h-3.5 text-[#A78BFA]" />
+                <span>Activar compatibles</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetProfileMods([])}
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.1] text-xs font-medium text-[#9B8FB8] hover:text-white transition-colors whitespace-nowrap"
+              >
+                Desactivar todos
+              </button>
+            </div>
+          )}
         </div>
 
         {subTab === 'mods' && (
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 md:max-w-xl">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 lg:max-w-xl">
             <div className="relative flex-1">
               <label htmlFor="mod-search" className="sr-only">
                 Buscar mods
@@ -194,7 +306,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar mod, autor o archivo .so..."
+                placeholder="Buscar mod, autor o librería .so..."
                 className="w-full min-h-[44px] pl-10 pr-4 rounded-xl bg-[#13111C] border border-white/[0.08] text-sm text-white placeholder-[#6A6085] focus:outline-none focus:border-[#8B5CF6]"
               />
             </div>
@@ -213,6 +325,32 @@ export const ModsView: React.FC<ModsViewProps> = ({
         )}
       </div>
 
+      {subTab === 'mods' && (
+        <div className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              { id: 'all', label: 'Todos' },
+              { id: 'active', label: 'Activos en perfil' },
+              { id: 'bonus', label: 'Mod Bonus' },
+              { id: 'imported', label: 'Importados' },
+            ] as const
+          ).map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => setCategoryFilter(chip.id)}
+              className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-medium transition-colors border ${
+                categoryFilter === chip.id
+                  ? 'bg-[#8B5CF6]/20 border-[#8B5CF6]/50 text-[#EDE9F6]'
+                  : 'bg-[#13111C] border-white/[0.08] text-[#9B8FB8] hover:text-white'
+              }`}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {isVanillaActive && subTab === 'mods' && (
         <div className="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-3 text-xs md:text-sm text-amber-200">
           El perfil activo ({activeProfile?.name}) usa el runtime <strong>Vanilla</strong>. Cambia a un perfil con <strong>AmethystRuntime</strong> para inyectar mods al iniciar.
@@ -229,10 +367,11 @@ export const ModsView: React.FC<ModsViewProps> = ({
               onClick={() => {
                 setQuery('');
                 setAbiFilter('all');
+                setCategoryFilter('all');
               }}
               className="min-h-[40px] px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-medium text-white"
             >
-              Limpiar búsqueda
+              Limpiar filtros
             </button>
           </div>
         ) : (
@@ -251,7 +390,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
                       <div className="flex flex-wrap items-center gap-2">
                         <Package className="w-4 h-4 text-[#A78BFA] shrink-0" />
                         <span className="px-2 py-0.5 rounded-md bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 text-[11px] font-semibold uppercase tracking-wide text-[#C4B5FD]">
-                          Mod Bonus · .amethyst
+                          Mod Bonus · .amethyst + .so
                         </span>
                         <h2 className="text-base font-semibold text-white">{mod.name}</h2>
                         <span className="text-xs font-mono text-[#A78BFA] tabular-nums">
@@ -312,6 +451,14 @@ export const ModsView: React.FC<ModsViewProps> = ({
                             <span className="text-xs font-mono text-[#A78BFA] tabular-nums">
                               v{mod.version}
                             </span>
+                            <span className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] font-mono text-[#C4BBE0]">
+                              {mod.sourceFormat ?? '.so'}
+                            </span>
+                            {enabled && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-[10px] font-semibold text-emerald-300">
+                                Activo
+                              </span>
+                            )}
                           </div>
                           <p className="text-sm text-[#9B8FB8] leading-relaxed">{mod.description}</p>
                           <p className="text-xs text-[#6A6085] font-mono tabular-nums">
@@ -426,11 +573,28 @@ export const ModsView: React.FC<ModsViewProps> = ({
                 </div>
               )}
 
-              <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-[#0B0A10] p-4 cursor-pointer hover:border-[#8B5CF6] transition-colors">
+              <label
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                className={`flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed p-5 cursor-pointer transition-colors text-center ${
+                  isDragging
+                    ? 'border-[#8B5CF6] bg-[#8B5CF6]/10'
+                    : 'border-white/20 bg-[#0B0A10] hover:border-[#8B5CF6]'
+                }`}
+              >
                 <Upload className="w-5 h-5 text-[#A78BFA]" />
                 <span className="text-xs font-medium text-[#C4BBE0]">
-                  Seleccionar archivo .amethyst, .so, .zip o mod.json desde el dispositivo
+                  Arrastra o selecciona un archivo .amethyst, .so, .zip o mod.json
                 </span>
+                {scanSummary && (
+                  <span className="text-[11px] font-mono text-emerald-400">
+                    {scanSummary}
+                  </span>
+                )}
                 <input
                   type="file"
                   accept=".amethyst,.so,.zip,.json"

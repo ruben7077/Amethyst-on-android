@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Code2, Layers, Play, Settings } from 'lucide-react';
+import { Box, Layers, Play, Settings } from 'lucide-react';
 import { LauncherTab } from '../core/types';
 
 interface NavigationShellProps {
@@ -14,7 +14,6 @@ const NAV_ITEMS: { id: LauncherTab; label: string; icon: React.ComponentType<{ c
   { id: LauncherTab.LAUNCHER, label: 'Launcher', icon: Play },
   { id: LauncherTab.PROFILES, label: 'Perfiles', icon: Layers },
   { id: LauncherTab.MODS, label: 'Mods', icon: Box },
-  { id: LauncherTab.PORT, label: 'Port Android', icon: Code2 },
   { id: LauncherTab.SETTINGS, label: 'Ajustes', icon: Settings },
 ];
 
@@ -88,7 +87,7 @@ export const NavigationShell: React.FC<NavigationShellProps> = ({
       {/* Mobile Thumb-Zone Bottom Tab Bar (64px height, total sticky <= 116px = 13.7% of 844px) */}
       <nav
         aria-label="Navegación móvil"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-30 h-16 bg-[#13111C]/95 backdrop-blur-md border-t border-white/[0.08] grid grid-cols-5 items-center px-1"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-30 h-16 bg-[#13111C]/95 backdrop-blur-md border-t border-white/[0.08] grid grid-cols-4 items-center px-1"
       >
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;

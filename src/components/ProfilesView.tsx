@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import {
   filterProfiles,
   validateProfileInput,
@@ -14,6 +14,7 @@ interface ProfilesViewProps {
   state: LauncherState;
   onSelectProfile: (profileId: string) => void;
   onSaveProfile: (profile: ProfileEntry) => void;
+  onDuplicateProfile: (profile: ProfileEntry) => void;
   onDeleteProfile: (profileId: string) => void;
 }
 
@@ -21,6 +22,7 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
   state,
   onSelectProfile,
   onSaveProfile,
+  onDuplicateProfile,
   onDeleteProfile,
 }) => {
   const [query, setQuery] = useState('');
@@ -104,10 +106,10 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-            Perfiles de Android
+            Perfiles de Juego
           </h1>
           <p className="mt-1 text-sm text-[#9B8FB8]">
-            Configura instancias de Minecraft Bedrock con su versión, runtime y conjunto de mods nativos (.so).
+            Configura instancias de Minecraft Bedrock con su versión, runtime y selección personalizada de mods.
           </p>
         </div>
 
@@ -189,6 +191,9 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
             const isActive = profile.id === state.activeProfileId;
             const runtime = state.runtimes.find((r) => r.id === profile.runtimeId);
             const isVanilla = runtime?.type === RuntimeType.VANILLA;
+            const assignedMods = isVanilla
+              ? []
+              : state.mods.filter((m) => profile.modIds.includes(m.id));
 
             return (
               <article
@@ -201,7 +206,7 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
                   <div className="flex items-start justify-between gap-3">
                     <h2 className="text-lg font-semibold text-white truncate">{profile.name}</h2>
                     {isActive && (
-                      <span className="text-xs font-semibold text-[#A78BFA] whitespace-nowrap shrink-0">
+                      <span className="px-2 py-0.5 rounded-md bg-[#8B5CF6]/20 text-[11px] font-semibold text-[#C4B5FD] whitespace-nowrap shrink-0">
                         Activo
                       </span>
                     )}
@@ -213,9 +218,27 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
                   <p className="mt-1 text-xs text-[#9B8FB8] tabular-nums">
                     {isVanilla
                       ? 'Sin mods (Vanilla)'
-                      : `${profile.modIds.length} ${profile.modIds.length === 1 ? 'mod asignado' : 'mods asignados'}`}{' '}
+                      : `${assignedMods.length} ${assignedMods.length === 1 ? 'mod asignado' : 'mods asignados'}`}{' '}
                     · {profile.lastPlayed ?? 'Sin iniciar'}
                   </p>
+
+                  {!isVanilla && assignedMods.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {assignedMods.slice(0, 3).map((mod) => (
+                        <span
+                          key={mod.id}
+                          className="px-2 py-0.5 rounded-md bg-white/[0.05] border border-white/[0.06] text-[11px] text-[#EDE9F6] truncate max-w-[160px]"
+                        >
+                          {mod.name}
+                        </span>
+                      ))}
+                      {assignedMods.length > 3 && (
+                        <span className="px-2 py-0.5 rounded-md bg-white/[0.04] text-[11px] text-[#9B8FB8]">
+                          +{assignedMods.length - 3} más
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-white/[0.06] flex items-center justify-between gap-2">
@@ -231,6 +254,15 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
                   >
                     <Check className="w-4 h-4" />
                     <span>{isActive ? 'Seleccionado' : 'Usar perfil'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onDuplicateProfile(profile)}
+                    aria-label={`Duplicar ${profile.name}`}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-[#EDE9F6] transition-colors"
+                  >
+                    <Copy className="w-4 h-4" />
                   </button>
 
                   <button
@@ -347,9 +379,28 @@ export const ProfilesView: React.FC<ProfilesViewProps> = ({
 
               {selectedFormRuntime?.type !== RuntimeType.VANILLA && (
                 <div>
-                  <span className="block text-xs font-medium text-[#C4BBE0] mb-2">
-                    Mods asignados al perfil
-                  </span>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="block text-xs font-medium text-[#C4BBE0]">
+                      Mods asignados al perfil
+                    </span>
+                    <div className="flex items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setFormModIds(state.mods.map((m) => m.id))}
+                        className="text-[#A78BFA] hover:text-white"
+                      >
+                        Todos
+                      </button>
+                      <span className="text-[#6A6085]">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setFormModIds([])}
+                        className="text-[#9B8FB8] hover:text-white"
+                      >
+                        Ninguno
+                      </button>
+                    </div>
+                  </div>
                   <div className="rounded-xl bg-[#0B0A10] border border-white/10 divide-y divide-white/[0.06] max-h-48 overflow-y-auto">
                     {state.mods.map((mod) => {
                       const checked = formModIds.includes(mod.id);

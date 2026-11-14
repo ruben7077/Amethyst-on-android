@@ -4,8 +4,9 @@ import {
   CheckCircle2,
   Cpu,
   Download,
-  FolderGit2,
+  PackagePlus,
   Play,
+  SlidersHorizontal,
   Square,
   Terminal,
   Wrench,
@@ -27,6 +28,8 @@ import {
 interface LauncherViewProps {
   state: LauncherState;
   onSelectProfile: (profileId: string) => void;
+  onToggleMod: (modId: string) => void;
+  onOpenImportMod: () => void;
   onInstallMissingTarget: (mcVersion: string, runtimeId?: string) => void;
   onNavigateTab: (tab: LauncherTab) => void;
   onRecordPlay: (profileId: string) => void;
@@ -35,6 +38,8 @@ interface LauncherViewProps {
 export const LauncherView: React.FC<LauncherViewProps> = ({
   state,
   onSelectProfile,
+  onToggleMod,
+  onOpenImportMod,
   onInstallMissingTarget,
   onNavigateTab,
   onRecordPlay,
@@ -78,22 +83,25 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
     setActiveSteps([]);
   };
 
+  const isVanilla = readiness.runtime?.type === RuntimeType.VANILLA;
+  const compatibleMods = state.mods.filter((m) => m.abi === state.config.targetAbi);
+
   const injectionLabel =
     state.config.injectionMethod === InjectionMethod.PATCHED_APK
-      ? 'APK Parcheado (JNI)'
+      ? 'APK Nativo (JNI)'
       : state.config.injectionMethod === InjectionMethod.SHIZUKU_ZYGISK
         ? 'Shizuku / Zygisk'
         : 'Wrapper LD_PRELOAD';
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       {/* Hero Banner Card */}
       <section className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#13111C]">
-        <div className="relative min-h-[260px] md:min-h-[300px] flex flex-col justify-end p-6 md:p-8">
+        <div className="relative min-h-[250px] md:min-h-[290px] flex flex-col justify-end p-5 sm:p-6 md:p-8">
           {!bannerError ? (
             <img
               src={bannerImg}
-              alt="Textura mineral de basalto y amatista para Amethyst Launcher Android"
+              alt="Textura mineral de basalto y amatista para Amethyst Launcher"
               referrerPolicy="no-referrer"
               onError={() => setBannerError(true)}
               className="absolute inset-0 w-full h-full object-cover opacity-55"
@@ -106,7 +114,7 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
           )}
           <div
             aria-hidden="true"
-            className="absolute inset-0 bg-gradient-to-t from-[#0B0A10] via-[#0B0A10]/75 to-[#0B0A10]/30"
+            className="absolute inset-0 bg-gradient-to-t from-[#0B0A10] via-[#0B0A10]/80 to-[#0B0A10]/30"
           />
 
           <div className="relative z-10 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
@@ -127,7 +135,7 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
 
               <div className="min-w-0">
                 <p className="text-xs font-medium text-[#C4BBE0] tracking-wide">
-                  Minecraft Bedrock Edition · Port Android ({state.config.targetAbi})
+                  Minecraft Bedrock Edition · Amethyst Runtime ({state.config.targetAbi})
                 </p>
                 <h1 className="mt-1 text-2xl md:text-4xl font-bold text-white tracking-tight text-balance">
                   {readiness.profile ? readiness.profile.name : 'Sin perfil seleccionado'}
@@ -137,9 +145,9 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
                   <span aria-hidden="true">·</span>
                   <span>{readiness.runtime?.name ?? 'Sin runtime'}</span>
                   <span aria-hidden="true">·</span>
-                  <span>
-                    {readiness.runtime?.type === RuntimeType.VANILLA
-                      ? 'Modo Vanilla'
+                  <span className={isVanilla ? 'text-[#9B8FB8]' : 'text-[#C4B5FD] font-medium'}>
+                    {isVanilla
+                      ? 'Modo Vanilla (sin mods)'
                       : `${readiness.activeModList.length} ${readiness.activeModList.length === 1 ? 'mod activo' : 'mods activos'}`}
                   </span>
                 </div>
@@ -256,67 +264,114 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
         </section>
       )}
 
-      {/* Two-Column Operational Overview (Android Target Specs + Active Mods / Runtime Console) */}
+      {/* Two-Column Operational Overview: Quick Mods Manager + Runtime Launch Console */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        {/* Left: Active Mods & Runtime Summary */}
-        <section className="lg:col-span-7 rounded-2xl bg-[#13111C] border border-white/[0.08] p-6 flex flex-col justify-between gap-6">
+        {/* Left: Quick Interactive Mods Manager for Active Profile */}
+        <section className="lg:col-span-7 rounded-2xl bg-[#13111C] border border-white/[0.08] p-5 sm:p-6 flex flex-col justify-between gap-5">
           <div>
-            <div className="flex items-center justify-between gap-4">
-              <h2 className="text-lg font-semibold text-white">
-                {readiness.runtime?.type === RuntimeType.VANILLA
-                  ? 'Instancia Vanilla Limpia'
-                  : 'Mods cargados en este perfil'}
-              </h2>
-              <button
-                type="button"
-                onClick={() => onNavigateTab(LauncherTab.MODS)}
-                className="min-h-[40px] px-3 py-1.5 rounded-lg text-xs font-medium text-[#A78BFA] hover:bg-white/5 transition-colors whitespace-nowrap shrink-0"
-              >
-                Gestionar mods
-              </button>
-            </div>
-
-            {readiness.runtime?.type === RuntimeType.VANILLA ? (
-              <div className="mt-4 py-8 text-center border-t border-white/[0.06]">
-                <p className="text-sm text-[#9B8FB8]">
-                  Este perfil utiliza el runtime nativo Vanilla sin inyección de librerías AmethystAPI.
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-white">
+                  {isVanilla ? 'Instancia Vanilla Limpia' : 'Mods del perfil activo'}
+                </h2>
+                <p className="text-xs text-[#9B8FB8] mt-0.5">
+                  {isVanilla
+                    ? 'Sin inyección de AmethystRuntime.'
+                    : 'Activa o desactiva mods .so / .amethyst antes de abrir Minecraft.'}
                 </p>
               </div>
-            ) : readiness.activeModList.length === 0 ? (
-              <div className="mt-4 py-8 text-center border-t border-white/[0.06] space-y-3">
-                <p className="text-sm text-[#9B8FB8]">
-                  No hay mods activados en el perfil actual.
-                </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenImportMod}
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-xs font-medium text-white flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                >
+                  <PackagePlus className="w-3.5 h-3.5 text-[#A78BFA]" />
+                  <span>Añadir mod</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => onNavigateTab(LauncherTab.MODS)}
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-medium text-[#A78BFA] hover:bg-white/5 transition-colors whitespace-nowrap"
+                >
+                  Ver todos
+                </button>
+              </div>
+            </div>
+
+            {isVanilla ? (
+              <div className="mt-4 py-8 text-center border-t border-white/[0.06] space-y-3">
+                <p className="text-sm text-[#9B8FB8]">
+                  Este perfil utiliza el runtime nativo Vanilla sin carga de librerías AmethystAPI.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab(LauncherTab.PROFILES)}
                   className="min-h-[40px] px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-medium text-white transition-colors"
                 >
-                  Activar mods
+                  Cambiar a perfil Amethyst
+                </button>
+              </div>
+            ) : compatibleMods.length === 0 ? (
+              <div className="mt-4 py-8 text-center border-t border-white/[0.06] space-y-3">
+                <p className="text-sm text-[#9B8FB8]">
+                  No hay mods disponibles para {state.config.targetAbi}.
+                </p>
+                <button
+                  type="button"
+                  onClick={onOpenImportMod}
+                  className="min-h-[40px] px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-medium text-white transition-colors"
+                >
+                  Importar .amethyst o .so
                 </button>
               </div>
             ) : (
               <ul className="mt-4 divide-y divide-white/[0.06] border-t border-white/[0.06]">
-                {readiness.activeModList.map((mod) => (
-                  <li key={mod.id} className="py-3.5 flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white truncate">{mod.name}</p>
-                      <p className="mt-0.5 text-xs text-[#9B8FB8] font-mono truncate tabular-nums">
-                        {mod.libraryFile} · v{mod.version} · {mod.abi}
-                      </p>
-                    </div>
-                    <span className="text-xs font-mono text-emerald-400 whitespace-nowrap shrink-0 tabular-nums">
-                      {mod.sizeKb} KB
-                    </span>
-                  </li>
-                ))}
+                {compatibleMods.map((mod) => {
+                  const enabled = Boolean(readiness.profile?.modIds.includes(mod.id));
+                  return (
+                    <li key={mod.id} className="py-3.5 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white truncate">{mod.name}</p>
+                          {mod.isBonus && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 text-[10px] font-semibold uppercase tracking-wide text-[#C4B5FD]">
+                              Bonus .amethyst
+                            </span>
+                          )}
+                          <span className="text-[11px] font-mono text-[#9B8FB8] tabular-nums">
+                            v{mod.version}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-[#9B8FB8] font-mono truncate tabular-nums">
+                          {mod.libraryFile} · {mod.abi}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={enabled}
+                        aria-label={`Alternar ${mod.name}`}
+                        onClick={() => onToggleMod(mod.id)}
+                        className={`min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                          enabled
+                            ? 'bg-[#8B5CF6] text-white hover:bg-[#7C3AED]'
+                            : 'bg-white/[0.06] text-[#9B8FB8] hover:bg-white/[0.12] hover:text-white'
+                        }`}
+                      >
+                        {enabled ? 'Activo' : 'Activar'}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
 
           <div className="pt-4 border-t border-white/[0.06] grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
             <div>
-              <span className="block text-[#9B8FB8]">Paquete Android</span>
+              <span className="block text-[#9B8FB8]">Paquete objetivo</span>
               <span className="mt-1 block font-mono text-white break-all">
                 {state.config.packageName}
               </span>
@@ -332,19 +387,19 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
           </div>
         </section>
 
-        {/* Right: Live Android Runtime Launch Console / Port Quick Card */}
-        <section className="lg:col-span-5 rounded-2xl bg-[#13111C] border border-white/[0.08] p-6 flex flex-col justify-between gap-5">
+        {/* Right: Live Runtime Launch Console */}
+        <section className="lg:col-span-5 rounded-2xl bg-[#13111C] border border-white/[0.08] p-5 sm:p-6 flex flex-col justify-between gap-5">
           <div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-[#A78BFA]" />
-                <h2 className="text-lg font-semibold text-white">Runtime Android (Logcat)</h2>
+                <h2 className="text-lg font-semibold text-white">Consola de Ejecución</h2>
               </div>
               <span className="text-xs font-medium text-[#C4BBE0]">
                 {launchState === 'idle'
                   ? 'En espera'
                   : launchState === 'launching'
-                    ? 'Inyectando...'
+                    ? 'Cargando...'
                     : 'Instancia activa'}
               </span>
             </div>
@@ -352,10 +407,10 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
             {activeSteps.length === 0 ? (
               <div className="mt-4 pt-4 border-t border-white/[0.06] space-y-3">
                 <p className="text-xs text-[#9B8FB8] leading-relaxed">
-                  Al pulsar <strong className="text-white">Iniciar Minecraft</strong>, el cargador Android prepara el manifiesto del perfil, carga <code className="text-[#C4BBE0]">libamethyst_runtime.so</code> mediante <code className="text-[#C4BBE0]">dlopen()</code> y ejecuta los mods compilados para <code className="text-[#C4BBE0]">{state.config.targetAbi}</code>.
+                  Al pulsar <strong className="text-white">Iniciar Minecraft</strong>, el cargador prepara el manifiesto del perfil, enlaza <code className="text-[#C4BBE0]">libamethyst_runtime.so</code>, inicializa cada mod ELF <code className="text-[#C4BBE0]">.so</code> para <code className="text-[#C4BBE0]">{state.config.targetAbi}</code> y empaqueta los packs <code className="text-[#C4BBE0]">.amethyst</code> en <code className="text-[#C4BBE0]">.mcaddon</code>.
                 </p>
                 <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between gap-3 text-xs text-[#9B8FB8]">
-                  <span className="shrink-0">Directorio scoped</span>
+                  <span className="shrink-0">Directorio local</span>
                   <span className="font-mono text-[#EDE9F6] truncate">
                     {state.config.storagePath}
                   </span>
@@ -396,7 +451,7 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
                 })}
                 {launchState === 'running' && (
                   <p className="pt-2 border-t border-white/[0.06] text-xs font-medium text-emerald-400">
-                    Instancia lanzada correctamente en com.mojang.minecraftpe.
+                    Instancia lanzada correctamente en {state.config.packageName}.
                   </p>
                 )}
               </div>
@@ -405,11 +460,11 @@ export const LauncherView: React.FC<LauncherViewProps> = ({
 
           <button
             type="button"
-            onClick={() => onNavigateTab(LauncherTab.PORT)}
+            onClick={() => onNavigateTab(LauncherTab.SETTINGS)}
             className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-sm font-medium text-[#EDE9F6] flex items-center justify-center gap-2 transition-colors"
           >
-            <FolderGit2 className="w-4 h-4 text-[#A78BFA]" />
-            <span>Ver código Kotlin y NDK del port</span>
+            <SlidersHorizontal className="w-4 h-4 text-[#A78BFA]" />
+            <span>Configuración de carga y APK</span>
           </button>
         </section>
       </div>

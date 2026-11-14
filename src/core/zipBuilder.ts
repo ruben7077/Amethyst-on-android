@@ -107,3 +107,133 @@ export function buildZipArchive(files: ZipInputFile[]): Uint8Array {
 
   return output;
 }
+
+export interface ArchiveModScan {
+  entries: string[];
+  soLibraries: string[];
+  hasPacks: boolean;
+  modJsonText: string | null;
+  manifestJsonText: string | null;
+}
+
+async function inflateRawBytes(compressed: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof DecompressionStream === 'undefined') {
+    return null;
+  }
+  try {
+    const ds = new DecompressionStream('deflate-raw');
+    const copy = new Uint8Array(compressed.byteLength);
+    copy.set(compressed);
+    const stream = new Blob([copy]).stream().pipeThrough(ds);
+    const buffer = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return null;
+  }
+}
+
+export async function scanAmethystArchive(bytes: Uint8Array): Promise<ArchiveModScan | null> {
+  if (bytes.length < 22) return null;
+
+  // Locate End of Central Directory (PK\x05\x06) scanning backwards
+  const minOffset = Math.max(0, bytes.length - 65557);
+  let eocdOffset = -1;
+  for (let i = bytes.length - 22; i >= minOffset; i--) {
+    if (
+      bytes[i] === 0x50 &&
+      bytes[i + 1] === 0x4b &&
+      bytes[i + 2] === 0x05 &&
+      bytes[i + 3] === 0x06
+    ) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return null;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const centralOffset = view.getUint32(eocdOffset + 16, true);
+  if (centralOffset >= bytes.length) return null;
+
+  const decoder = new TextDecoder('utf-8');
+  const entries: string[] = [];
+  const soLibraries: string[] = [];
+  let hasPacks = false;
+  let modJsonText: string | null = null;
+  let manifestJsonText: string | null = null;
+
+  const readEntryBytes = async (
+    localHeaderOffset: number,
+    method: number,
+    compressedSize: number
+  ): Promise<Uint8Array | null> => {
+    if (localHeaderOffset + 30 > bytes.length) return null;
+    if (view.getUint32(localHeaderOffset, true) !== 0x04034b50) return null;
+    const fnLen = view.getUint16(localHeaderOffset + 26, true);
+    const extraLen = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + fnLen + extraLen;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > bytes.length) return null;
+    const slice = bytes.subarray(dataStart, dataEnd);
+    if (method === 0) return slice;
+    if (method === 8) return inflateRawBytes(slice);
+    return null;
+  };
+
+  let cursor = centralOffset;
+  for (let idx = 0; idx < totalEntries && cursor + 46 <= eocdOffset; idx++) {
+    if (view.getUint32(cursor, true) !== 0x02014b50) break;
+    const method = view.getUint16(cursor + 10, true);
+    const compressedSize = view.getUint32(cursor + 20, true);
+    const fileNameLen = view.getUint16(cursor + 28, true);
+    const extraLen = view.getUint16(cursor + 30, true);
+    const commentLen = view.getUint16(cursor + 32, true);
+    const localHeaderOffset = view.getUint32(cursor + 42, true);
+
+    const nameStart = cursor + 46;
+    const nameEnd = nameStart + fileNameLen;
+    if (nameEnd > bytes.length) break;
+
+    const rawName = decoder.decode(bytes.subarray(nameStart, nameEnd));
+    const normalized = rawName.replace(/\\/g, '/');
+    entries.push(normalized);
+
+    const lower = normalized.toLowerCase();
+    if (lower.endsWith('.so')) {
+      soLibraries.push(normalized);
+    }
+    if (
+      lower.includes('behavior_packs/') ||
+      lower.includes('resource_packs/')
+    ) {
+      hasPacks = true;
+    }
+
+    if (lower === 'mod.json' || lower.endsWith('/mod.json')) {
+      const content = await readEntryBytes(localHeaderOffset, method, compressedSize);
+      if (content) {
+        modJsonText = decoder.decode(content);
+      }
+    } else if (
+      !manifestJsonText &&
+      (lower === 'manifest.json' || lower.endsWith('/manifest.json'))
+    ) {
+      const content = await readEntryBytes(localHeaderOffset, method, compressedSize);
+      if (content) {
+        manifestJsonText = decoder.decode(content);
+      }
+    }
+
+    cursor = nameEnd + extraLen + commentLen;
+  }
+
+  return {
+    entries,
+    soLibraries,
+    hasPacks,
+    modJsonText,
+    manifestJsonText,
+  };
+}
+

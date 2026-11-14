@@ -1,5 +1,6 @@
 package com.rubenamethyst.app
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,9 +15,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.rubenamethyst.app.ui.AmethystTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class AmethystGameActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,14 +33,19 @@ class AmethystGameActivity : ComponentActivity() {
         val runtimeSoPath = intent.getStringExtra("amethyst_runtime_so") ?: ""
         val modSoPaths = intent.getStringArrayExtra("amethyst_mod_paths") ?: emptyArray()
         val packNotices = intent.getStringArrayExtra("amethyst_pack_notices") ?: emptyArray()
+        val packDirs = intent.getStringArrayExtra("amethyst_pack_dirs")?.toList() ?: emptyList()
 
         setContent {
             var isLoading by remember { mutableStateOf(true) }
             var nativeReport by remember { mutableStateOf("") }
+            var mcAddonFile by remember { mutableStateOf<File?>(null) }
+            var actionFeedback by remember { mutableStateOf<String?>(null) }
+            var showRawLog by remember { mutableStateOf(false) }
 
             LaunchedEffect(Unit) {
-                nativeReport = withContext(Dispatchers.IO) {
-                    runCatching {
+                val baseDir = getExternalFilesDir(null) ?: filesDir
+                val result = withContext(Dispatchers.IO) {
+                    val report = runCatching {
                         AmethystNativeBridge.ensureLoaded()
                         AmethystNativeBridge.nativeBootstrapMods(
                             mcNativeDir = mcNativeDir,
@@ -49,7 +57,13 @@ class AmethystGameActivity : ComponentActivity() {
                     }.getOrElse { err ->
                         "[JNI_ERROR] Error en puente nativo: ${err.message ?: err::class.java.simpleName}"
                     }
+                    val addon = runCatching {
+                        ModRepository(baseDir).buildMcAddonFromPacks(packDirs)
+                    }.getOrNull()
+                    Pair(report, addon)
                 }
+                nativeReport = result.first
+                mcAddonFile = result.second
                 isLoading = false
             }
 
@@ -82,17 +96,20 @@ class AmethystGameActivity : ComponentActivity() {
                             style = MaterialTheme.typography.headlineSmall
                         )
                         Text(
-                            text = "MCBE $mcVersion · Paquete base: $mcPackage",
+                            text = "MCBE $mcVersion · $mcPackage",
                             style = MaterialTheme.typography.bodyMedium
                         )
 
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
                                 Text(
-                                    text = "Diagnóstico nativo (dlopen / JNI)",
+                                    text = if (isLoading) "Preparando entorno Amethyst..." else "Estado de la sesión",
                                     style = MaterialTheme.typography.titleMedium
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
+
                                 if (isLoading) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -100,52 +117,135 @@ class AmethystGameActivity : ComponentActivity() {
                                     ) {
                                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                                         Text(
-                                            text = "Verificando runtime y librerías ELF...",
+                                            text = "Verificando runtime, librerías .so y packs .amethyst...",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
                                 } else {
                                     Text(
-                                        text = fullReport,
-                                        fontFamily = FontFamily.Monospace,
-                                        style = MaterialTheme.typography.bodySmall
+                                        text = if (runtimeOk) {
+                                            "Runtime listo · ${modSoPaths.size} ${if (modSoPaths.size == 1) "mod nativo (.so)" else "mods nativos (.so)"} cargados"
+                                        } else {
+                                            "Runtime: error al inicializar"
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium
                                     )
+                                    if (mcAddonFile != null) {
+                                        Text(
+                                            text = "Packs de mods (.mcaddon) empaquetados para importar directamente en Minecraft.",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    if (hasPairIp) {
+                                        Text(
+                                            text = "Nota: tu APK de Play Store usa PairIP; para inyectar hooks en memoria usa un APK sin PairIP, o importa los packs .mcaddon en Minecraft.",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    TextButton(
+                                        onClick = { showRawLog = !showRawLog },
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) {
+                                        Text(if (showRawLog) "Ocultar registro técnico (JNI)" else "Ver registro técnico (JNI / dlopen)")
+                                    }
+
+                                    if (showRawLog) {
+                                        Text(
+                                            text = fullReport,
+                                            fontFamily = FontFamily.Monospace,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                 }
                             }
                         }
 
-                        if (!isLoading) {
-                            if (hasPairIp) {
+                        actionFeedback?.let { msg ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
                                 Text(
-                                    text = "Tu instalación de Minecraft ($mcPackage) incluye protección PairIP (libpairipcore.so). Android impide cargar su binario desde otra app sin un APK parcheado o módulo LSPosed/Zygisk.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            } else if (packNotices.isNotEmpty() && !hasAndroidSoMods) {
-                                Text(
-                                    text = "Los mods activos en este perfil solo contienen packs (.amethyst de Windows con .dll) sin librerías ELF (.so) para Android arm64-v8a. Sus resource/behavior packs ya fueron extraídos.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            } else if (!canLaunchModded) {
-                                Text(
-                                    text = "Amethyst mantuvo abierta esta pantalla para no iniciar Minecraft normal sin mods.",
+                                    text = msg,
+                                    modifier = Modifier.padding(14.dp),
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
                         }
 
-                        if (canLaunchModded) {
+                        if (!isLoading && mcAddonFile != null) {
                             Button(
                                 onClick = {
-                                    val launchIntent = packageManager.getLaunchIntentForPackage(mcPackage)
-                                        ?: Intent().apply {
-                                            setClassName(mcPackage, "com.mojang.minecraftpe.MainActivity")
+                                    val addon = mcAddonFile ?: return@Button
+                                    try {
+                                        val uri = FileProvider.getUriForFile(
+                                            this@AmethystGameActivity,
+                                            "${packageName}.fileprovider",
+                                            addon
+                                        )
+                                        val importIntent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(uri, "application/octet-stream")
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            setPackage(mcPackage)
                                         }
-                                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    startActivity(launchIntent)
+                                        startActivity(importIntent)
+                                    } catch (_: ActivityNotFoundException) {
+                                        try {
+                                            val uri = FileProvider.getUriForFile(
+                                                this@AmethystGameActivity,
+                                                "${packageName}.fileprovider",
+                                                addon
+                                            )
+                                            val chooser = Intent.createChooser(
+                                                Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(uri, "*/*")
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                },
+                                                "Abrir packs en Minecraft"
+                                            )
+                                            startActivity(chooser)
+                                        } catch (e: Exception) {
+                                            actionFeedback = "No se encontró aplicación para abrir .mcaddon: ${e.message}"
+                                        }
+                                    } catch (e: Exception) {
+                                        actionFeedback = "Error al enviar .mcaddon a Minecraft: ${e.message}"
+                                    }
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Continuar al cliente Minecraft parcheado")
+                                Text("Importar Packs (.mcaddon) y Abrir Minecraft")
+                            }
+                        }
+
+                        if (!isLoading) {
+                            if (canLaunchModded) {
+                                Button(
+                                    onClick = {
+                                        val launchIntent = packageManager.getLaunchIntentForPackage(mcPackage)
+                                            ?: Intent().apply {
+                                                setClassName(mcPackage, "com.mojang.minecraftpe.MainActivity")
+                                            }
+                                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        startActivity(launchIntent)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Continuar al cliente Minecraft parcheado")
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = {
+                                        val launchIntent = packageManager.getLaunchIntentForPackage(mcPackage)
+                                        if (launchIntent != null) {
+                                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            startActivity(launchIntent)
+                                        } else {
+                                            actionFeedback = "No se encontró $mcPackage instalado en el dispositivo."
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Abrir Minecraft ($mcPackage)")
+                                }
                             }
                         }
 
