@@ -165,6 +165,16 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
   assert.ok(gameActivity?.content.includes('safeDrawingPadding'));
   assert.ok(gameActivity?.content.includes('Dispatchers.IO'));
   assert.ok(gameActivity?.content.includes('FileProvider.getUriForFile'));
+  assert.ok(gameActivity?.content.includes('mcAddonResult'));
+  const modRepo = ANDROID_PORT_FILES.find(
+    (f) => f.path === 'app/src/main/java/com/rubenamethyst/app/ModRepository.kt'
+  );
+  assert.ok(modRepo?.content.includes('minecraft:block'));
+  assert.ok(modRepo?.content.includes('minecraft:item'));
+  assert.ok(modRepo?.content.includes('inventory_screen_pocket.json'));
+  assert.ok(modRepo?.content.includes('patchCreateInventoryUiJson'));
+  assert.ok(modRepo?.content.includes('textures/items/create/wrench'));
+  assert.ok(modRepo?.content.includes('synthesizedBlocks'));
   const filePathsXml = ANDROID_PORT_FILES.find(
     (f) => f.path === 'app/src/main/res/xml/file_paths.xml'
   );

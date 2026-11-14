@@ -38,7 +38,7 @@ class AmethystGameActivity : ComponentActivity() {
         setContent {
             var isLoading by remember { mutableStateOf(true) }
             var nativeReport by remember { mutableStateOf("") }
-            var mcAddonFile by remember { mutableStateOf<File?>(null) }
+            var mcAddonResult by remember { mutableStateOf<ModRepository.McAddonBuildResult?>(null) }
             var actionFeedback by remember { mutableStateOf<String?>(null) }
             var showRawLog by remember { mutableStateOf(false) }
 
@@ -63,7 +63,7 @@ class AmethystGameActivity : ComponentActivity() {
                     Pair(report, addon)
                 }
                 nativeReport = result.first
-                mcAddonFile = result.second
+                mcAddonResult = result.second
                 isLoading = false
             }
 
@@ -130,15 +130,20 @@ class AmethystGameActivity : ComponentActivity() {
                                         },
                                         style = MaterialTheme.typography.bodyMedium
                                     )
-                                    if (mcAddonFile != null) {
+                                    mcAddonResult?.let { addonRes ->
+                                        val synthText = if (addonRes.synthesizedItems > 0 || addonRes.synthesizedBlocks > 0) {
+                                            " (${addonRes.synthesizedBlocks} bloques y ${addonRes.synthesizedItems} ítems generados)"
+                                        } else {
+                                            ""
+                                        }
                                         Text(
-                                            text = "Packs de mods (.mcaddon) empaquetados para importar directamente en Minecraft.",
+                                            text = "Packs listos (.mcaddon)$synthText con pestaña dedicada Create. Activa Create BP en tu mundo; en MCPE Play Store (sin hook C++) los ítems también aparecen en Lupa ('create'), Construcción y Objetos.",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
                                     if (hasPairIp) {
                                         Text(
-                                            text = "Nota: tu APK de Play Store usa PairIP; para inyectar hooks en memoria usa un APK sin PairIP, o importa los packs .mcaddon en Minecraft.",
+                                            text = "Nota: tu APK de Play Store usa PairIP; los packs .mcaddon cargan los bloques, ítems y recetas directo en Minecraft.",
                                             style = MaterialTheme.typography.bodySmall
                                         )
                                     }
@@ -171,10 +176,10 @@ class AmethystGameActivity : ComponentActivity() {
                             }
                         }
 
-                        if (!isLoading && mcAddonFile != null) {
+                        if (!isLoading && mcAddonResult != null) {
                             Button(
                                 onClick = {
-                                    val addon = mcAddonFile ?: return@Button
+                                    val addon = mcAddonResult?.file ?: return@Button
                                     try {
                                         val uri = FileProvider.getUriForFile(
                                             this@AmethystGameActivity,

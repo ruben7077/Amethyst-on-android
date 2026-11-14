@@ -331,11 +331,288 @@ class ModRepository(
         targetFile.writeText(payload.toString(2))
     }
 
-    fun buildMcAddonFromPacks(packDirs: List<String>): File? {
+    data class McAddonBuildResult(
+        val file: File,
+        val synthesizedItems: Int,
+        val synthesizedBlocks: Int
+    )
+
+    private fun bumpManifestJson(
+        rawJson: String,
+        newPatchVersion: Int,
+        dependencyUuid: String? = null
+    ): ByteArray {
+        return try {
+            val root = JSONObject(rawJson)
+            val header = root.optJSONObject("header")
+            var bumpedTuple = JSONArray().apply {
+                put(1); put(0); put(newPatchVersion)
+            }
+            if (header != null) {
+                val ver = header.optJSONArray("version")
+                val major = ver?.optInt(0, 1) ?: 1
+                val minor = ver?.optInt(1, 0) ?: 0
+                val patch = (ver?.optInt(2, 0) ?: 0) + newPatchVersion
+                bumpedTuple = JSONArray().apply {
+                    put(major); put(minor); put(patch)
+                }
+                header.put("version", bumpedTuple)
+            }
+            val modules = root.optJSONArray("modules")
+            if (modules != null) {
+                for (i in 0 until modules.length()) {
+                    val m = modules.optJSONObject(i) ?: continue
+                    m.put("version", JSONArray(bumpedTuple.toString()))
+                }
+            }
+            if (!dependencyUuid.isNullOrBlank()) {
+                val deps = root.optJSONArray("dependencies") ?: JSONArray()
+                var alreadyHas = false
+                for (i in 0 until deps.length()) {
+                    if (deps.optJSONObject(i)?.optString("uuid") == dependencyUuid) {
+                        deps.optJSONObject(i)?.put("version", JSONArray(bumpedTuple.toString()))
+                        alreadyHas = true
+                    }
+                }
+                if (!alreadyHas) {
+                    deps.put(
+                        JSONObject().apply {
+                            put("uuid", dependencyUuid)
+                            put("version", JSONArray(bumpedTuple.toString()))
+                        }
+                    )
+                }
+                root.put("dependencies", deps)
+            }
+            root.toString(2).toByteArray(Charsets.UTF_8)
+        } catch (_: Exception) {
+            rawJson.toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    private fun parseLangEntries(langFile: File): Pair<Map<String, String>, Map<String, String>> {
+        val items = linkedMapOf<String, String>()
+        val tiles = linkedMapOf<String, String>()
+        if (!langFile.exists()) return items to tiles
+        langFile.forEachLine(Charsets.UTF_8) { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEachLine
+            val eqIdx = trimmed.indexOf('=')
+            if (eqIdx <= 0) return@forEachLine
+            val key = trimmed.substring(0, eqIdx).trim()
+            val value = trimmed.substring(eqIdx + 1).trim()
+            if (key.startsWith("item.") && key.endsWith(".name")) {
+                val id = key.removePrefix("item.").removeSuffix(".name")
+                if (id.contains(':')) items[id] = value
+            } else if (key.startsWith("tile.") && key.endsWith(".name")) {
+                val id = key.removePrefix("tile.").removeSuffix(".name")
+                if (id.contains(':')) tiles[id] = value
+            }
+        }
+        return items to tiles
+    }
+
+    private fun readTextureKeys(jsonFile: File): Set<String> {
+        if (!jsonFile.exists()) return emptySet()
+        return try {
+            val root = JSONObject(jsonFile.readText(Charsets.UTF_8))
+            val texData = root.optJSONObject("texture_data") ?: return emptySet()
+            val keys = linkedSetOf<String>()
+            val iter = texData.keys()
+            while (iter.hasNext()) {
+                keys.add(iter.next())
+            }
+            keys
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
+    private fun humanizeIdentifier(id: String): String {
+        return id.substringAfter(':')
+            .split('_')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part ->
+                part.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase() else ch.toString() }
+            }
+            .ifBlank { id }
+    }
+
+    private fun resolveItemTextureKey(id: String, itemTexKeys: Set<String>): String {
+        if (id in itemTexKeys) return id
+        val ns = id.substringBefore(':')
+        val short = id.substringAfter(':')
+        val noPlaceable = "$ns:${short.removeSuffix("_placeable")}"
+        if (noPlaceable in itemTexKeys) return noPlaceable
+        val base = "${id}_base"
+        if (base in itemTexKeys) return base
+        if ("package" in short) {
+            val pkgKey = itemTexKeys.firstOrNull { "package" in it }
+            if (pkgKey != null) return pkgKey
+        }
+        val tokens = short.split('_').filter { it.length >= 4 }
+        for (token in tokens.reversed()) {
+            val match = itemTexKeys.firstOrNull { it.endsWith(token) || token in it }
+            if (match != null) return match
+        }
+        return itemTexKeys.firstOrNull { "andesite_alloy" in it }
+            ?: itemTexKeys.firstOrNull()
+            ?: "apple"
+    }
+
+    private fun resolveBlockTextureKey(id: String, terrainTexKeys: Set<String>): String {
+        if (id in terrainTexKeys) return id
+        val ns = id.substringBefore(':')
+        val short = id.substringAfter(':')
+        for (suffix in listOf("_side", "_top", "_front", "_base", "_bottom", "_on")) {
+            val candidate = "$ns:$short$suffix"
+            if (candidate in terrainTexKeys) return candidate
+        }
+
+        val stems = mutableListOf(short)
+        for (dropSuffix in listOf(
+            "_block", "_stairs", "_slab", "_wall", "_window_pane",
+            "_pane", "_door", "_trapdoor", "_bars", "_ladder",
+            "_scaffolding", "_table_cloth"
+        )) {
+            if (short.endsWith(dropSuffix) && short.length > dropSuffix.length) {
+                stems.add(short.removeSuffix(dropSuffix))
+            }
+        }
+        val colors = listOf(
+            "light_blue_", "light_gray_", "black_", "blue_", "brown_",
+            "cyan_", "gray_", "green_", "lime_", "magenta_",
+            "orange_", "pink_", "purple_", "red_", "white_", "yellow_"
+        )
+        for (color in colors) {
+            if (short.startsWith(color)) {
+                val rest = short.removePrefix(color)
+                val colorName = color.trimEnd('_')
+                stems.add("${rest}_$colorName")
+                stems.add(rest)
+            }
+        }
+
+        for (stem in stems) {
+            val exact = "$ns:$stem"
+            if (exact in terrainTexKeys) return exact
+            for (suffix in listOf("_side", "_top", "_front", "_base")) {
+                val candidate = "$ns:$stem$suffix"
+                if (candidate in terrainTexKeys) return candidate
+            }
+        }
+
+        val tokens = short.split('_').filter { it.length >= 4 }
+        for (token in tokens) {
+            val match = terrainTexKeys.firstOrNull { token in it }
+            if (match != null) return match
+        }
+
+        return terrainTexKeys.firstOrNull { "andesite_casing" in it }
+            ?: terrainTexKeys.firstOrNull()
+            ?: "stone"
+    }
+
+    private fun patchCreateInventoryUiJson(
+        relPath: String,
+        rawJson: String,
+        primaryIconTexture: String,
+        secondaryIconTexture: String
+    ): ByteArray {
+        return try {
+            val root = JSONObject(rawJson)
+            if (relPath == "ui/inventory_screen.json") {
+                root.put(
+                    "create_base_tab_icon",
+                    JSONObject().apply {
+                        put("type", "image")
+                        put("texture", primaryIconTexture)
+                        put("size", JSONArray().apply { put(16); put(16) })
+                    }
+                )
+                root.put(
+                    "create_palettes_tab_icon",
+                    JSONObject().apply {
+                        put("type", "image")
+                        put("texture", secondaryIconTexture)
+                        put("size", JSONArray().apply { put(16); put(16) })
+                    }
+                )
+                val creativeLabel = root.optJSONObject("creative_label")
+                if (creativeLabel != null) {
+                    val cleanControls = JSONArray().apply {
+                        put(
+                            JSONObject().apply {
+                                put(
+                                    "create_base_tab_label@crafting.create_tab_label",
+                                    JSONObject().apply {
+                                        put("text", "itemGroup.create.base")
+                                        put(
+                                            "bindings",
+                                            JSONArray().apply {
+                                                put(
+                                                    JSONObject().apply {
+                                                        put("binding_type", "global")
+                                                        put("binding_name", "#create_is_left_tab_base")
+                                                        put("binding_name_override", "#visible")
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                        put(
+                            JSONObject().apply {
+                                put(
+                                    "create_android_hint@crafting.create_tab_label",
+                                    JSONObject().apply {
+                                        put("text", "Create (827 items/bloques) - Sin hook C++ usa Lupa: create")
+                                        put("offset", JSONArray().apply { put(0); put(16) })
+                                        put("font_scale_factor", 0.78)
+                                        put(
+                                            "bindings",
+                                            JSONArray().apply {
+                                                put(
+                                                    JSONObject().apply {
+                                                        put("binding_type", "global")
+                                                        put("binding_name", "#create_is_left_tab_base")
+                                                        put("binding_name_override", "#visible")
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        )
+                    }
+                    creativeLabel.put("controls", cleanControls)
+                }
+            } else if (relPath == "ui/inventory_screen_pocket.json") {
+                // Dejar una sola pestaña dedicada de Create (sin solaparse con el cofre inferior)
+                val panel = root.optJSONObject("create_left_tab_navigation_panel")
+                val panelControls = panel?.optJSONArray("controls")
+                if (panel != null && panelControls != null && panelControls.length() > 1) {
+                    val singleTabOnly = JSONArray().apply { put(panelControls.get(0)) }
+                    panel.put("controls", singleTabOnly)
+                    panel.put("size", JSONArray().apply { put("100% + 4px"); put(29) })
+                }
+            }
+            root.toString(2).toByteArray(Charsets.UTF_8)
+        } catch (_: Exception) {
+            rawJson.toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    fun buildMcAddonFromPacks(packDirs: List<String>): McAddonBuildResult? {
         if (packDirs.isEmpty()) return null
         val exportsDir = File(baseDir, "exports").apply { mkdirs() }
         val outFile = File(exportsDir, "amethyst_active_packs.mcaddon")
         var entriesWritten = 0
+        var totalSynthesizedItems = 0
+        var totalSynthesizedBlocks = 0
 
         ZipOutputStream(outFile.outputStream().buffered()).use { zos ->
             val seenPaths = mutableSetOf<String>()
@@ -343,6 +620,42 @@ class ModRepository(
                 val modDir = File(dirPath)
                 if (!modDir.exists()) return@forEachIndexed
                 val modSlug = modDir.name.ifBlank { "mod_$index" }
+
+                val rpRoot = File(modDir, "resource_packs").listFiles()?.firstOrNull { it.isDirectory }
+                val bpRoot = File(modDir, "behavior_packs").listFiles()?.firstOrNull { it.isDirectory }
+
+                val rpUuid = rpRoot?.let { root ->
+                    val mf = File(root, "manifest.json")
+                    if (mf.exists()) {
+                        runCatching { JSONObject(mf.readText()).optJSONObject("header")?.optString("uuid") }.getOrNull()
+                    } else null
+                }
+
+                val itemTexKeys = rpRoot?.let { readTextureKeys(File(it, "textures/item_texture.json")) } ?: emptySet()
+                val terrainTexKeys = rpRoot?.let { readTextureKeys(File(it, "textures/terrain_texture.json")) } ?: emptySet()
+                val (langItems, langTiles) = rpRoot?.let { parseLangEntries(File(it, "texts/en_US.lang")) }
+                    ?: (emptyMap<String, String>() to emptyMap())
+
+                val hasNativeJsonItems = bpRoot?.let {
+                    File(it, "items").let { dir -> dir.isDirectory && (dir.listFiles()?.any { f -> f.extension == "json" } == true) }
+                } ?: false
+                val hasNativeJsonBlocks = bpRoot?.let {
+                    File(it, "blocks").let { dir -> dir.isDirectory && (dir.listFiles()?.any { f -> f.extension == "json" } == true) }
+                } ?: false
+
+                val needsSynthesis = bpRoot != null && !hasNativeJsonItems && !hasNativeJsonBlocks &&
+                    (langItems.isNotEmpty() || langTiles.isNotEmpty() || itemTexKeys.isNotEmpty())
+
+                val primaryTabTex = if (rpRoot != null && File(rpRoot, "textures/items/create/wrench.png").exists()) {
+                    "textures/items/create/wrench"
+                } else {
+                    "textures/items/create/andesite_alloy"
+                }
+                val secondaryTabTex = if (rpRoot != null && File(rpRoot, "textures/items/create/brass_ingot.png").exists()) {
+                    "textures/items/create/brass_ingot"
+                } else {
+                    primaryTabTex
+                }
 
                 listOf("behavior_packs", "resource_packs").forEach { packCategory ->
                     val categoryDir = File(modDir, packCategory)
@@ -352,12 +665,189 @@ class ModRepository(
                         val prefix = "${modSlug}_${packCategory.take(2)}_${packRoot.name}"
                         packRoot.walkTopDown().filter { it.isFile && it.name != ".gitkeep" }.forEach { file ->
                             val rel = file.relativeTo(packRoot).invariantSeparatorsPath
+
                             val zipPath = "$prefix/$rel"
                             if (seenPaths.add(zipPath)) {
                                 zos.putNextEntry(ZipEntry(zipPath))
-                                file.inputStream().use { it.copyTo(zos) }
+                                when {
+                                    rel == "manifest.json" && needsSynthesis -> {
+                                        val bytes = bumpManifestJson(
+                                            rawJson = file.readText(Charsets.UTF_8),
+                                            newPatchVersion = 4,
+                                            dependencyUuid = if (packCategory == "behavior_packs") rpUuid else null
+                                        )
+                                        zos.write(bytes)
+                                    }
+                                    needsSynthesis && packCategory == "resource_packs" &&
+                                        (rel == "ui/inventory_screen.json" || rel == "ui/inventory_screen_pocket.json") -> {
+                                        val patchedUi = patchCreateInventoryUiJson(
+                                            relPath = rel,
+                                            rawJson = file.readText(Charsets.UTF_8),
+                                            primaryIconTexture = primaryTabTex,
+                                            secondaryIconTexture = secondaryTabTex
+                                        )
+                                        zos.write(patchedUi)
+                                    }
+                                    packCategory == "behavior_packs" && rel.startsWith("entities/") && rel.endsWith(".json") && needsSynthesis -> {
+                                        val patched = file.readText(Charsets.UTF_8)
+                                            .replace("\"format_version\": \"1.26.0\"", "\"format_version\": \"1.20.80\"")
+                                        zos.write(patched.toByteArray(Charsets.UTF_8))
+                                    }
+                                    else -> {
+                                        file.inputStream().use { it.copyTo(zos) }
+                                    }
+                                }
                                 zos.closeEntry()
                                 entriesWritten++
+                            }
+                        }
+
+                        // Sintetizar items/*.json y blocks/*.json válidos para Bedrock 1.21 Android
+                        if (needsSynthesis && packCategory == "behavior_packs") {
+                            val generatedItemIds = mutableSetOf<String>()
+                            val allItemIds = (langItems.keys + itemTexKeys).distinct()
+
+                            allItemIds.forEach { itemId ->
+                                if (!itemId.contains(':')) return@forEach
+                                generatedItemIds.add(itemId)
+                                val shortName = itemId.substringAfter(':').replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                val zipPath = "$prefix/items/$shortName.json"
+                                if (!seenPaths.add(zipPath)) return@forEach
+
+                                val displayName = langItems[itemId] ?: humanizeIdentifier(itemId)
+                                val texKey = resolveItemTextureKey(itemId, itemTexKeys)
+                                val lowerId = itemId.lowercase()
+                                val isEquipment = listOf(
+                                    "wrench", "goggles", "grip", "shaper", "cannon",
+                                    "backtank", "boots", "chestplate", "helmet", "leggings",
+                                    "wand", "sandpaper", "sand_paper"
+                                ).any { it in lowerId }
+                                val isFood = listOf("chocolate", "tea", "roll", "cake", "apple", "berries")
+                                    .any { it in lowerId }
+                                val category = when {
+                                    isEquipment -> "equipment"
+                                    isFood -> "nature"
+                                    else -> "items"
+                                }
+
+                                val itemJson = JSONObject().apply {
+                                    put("format_version", "1.20.80")
+                                    put(
+                                        "minecraft:item",
+                                        JSONObject().apply {
+                                            put(
+                                                "description",
+                                                JSONObject().apply {
+                                                    put("identifier", itemId)
+                                                    put(
+                                                        "menu_category",
+                                                        JSONObject().apply {
+                                                            put("category", category)
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                            put(
+                                                "components",
+                                                JSONObject().apply {
+                                                    put(
+                                                        "minecraft:icon",
+                                                        JSONObject().apply {
+                                                            put(
+                                                                "textures",
+                                                                JSONObject().apply {
+                                                                    put("default", texKey)
+                                                                }
+                                                            )
+                                                        }
+                                                    )
+                                                    put(
+                                                        "minecraft:display_name",
+                                                        JSONObject().apply {
+                                                            put("value", displayName)
+                                                        }
+                                                    )
+                                                    put("minecraft:max_stack_size", if (isEquipment) 1 else 64)
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+
+                                zos.putNextEntry(ZipEntry(zipPath))
+                                zos.write(itemJson.toString(2).toByteArray(Charsets.UTF_8))
+                                zos.closeEntry()
+                                entriesWritten++
+                                totalSynthesizedItems++
+                            }
+
+                            langTiles.forEach { (blockId, label) ->
+                                if (!blockId.contains(':') || generatedItemIds.contains(blockId)) return@forEach
+                                val shortName = blockId.substringAfter(':').replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                val zipPath = "$prefix/blocks/$shortName.json"
+                                if (!seenPaths.add(zipPath)) return@forEach
+
+                                val texKey = resolveBlockTextureKey(blockId, terrainTexKeys)
+                                val lowerId = blockId.lowercase()
+                                val isCutout = listOf(
+                                    "window", "glass", "bars", "ladder", "scaffolding",
+                                    "door", "trapdoor", "rail", "track", "girder", "funnel"
+                                ).any { it in lowerId }
+                                val isNatureStone = listOf(
+                                    "ore", "limestone", "asurine", "crimsite", "ochrum",
+                                    "veridium", "scoria", "scorchia"
+                                ).any { it in lowerId } && listOf("casing", "brick", "pillar", "stairs", "slab", "wall").none { it in lowerId }
+
+                                val blockJson = JSONObject().apply {
+                                    put("format_version", "1.20.80")
+                                    put(
+                                        "minecraft:block",
+                                        JSONObject().apply {
+                                            put(
+                                                "description",
+                                                JSONObject().apply {
+                                                    put("identifier", blockId)
+                                                    put(
+                                                        "menu_category",
+                                                        JSONObject().apply {
+                                                            put("category", if (isNatureStone) "nature" else "construction")
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                            put(
+                                                "components",
+                                                JSONObject().apply {
+                                                    put(
+                                                        "minecraft:material_instances",
+                                                        JSONObject().apply {
+                                                            put(
+                                                                "*",
+                                                                JSONObject().apply {
+                                                                    put("texture", texKey)
+                                                                    put("render_method", if (isCutout) "alpha_test" else "opaque")
+                                                                }
+                                                            )
+                                                        }
+                                                    )
+                                                    put("minecraft:display_name", label)
+                                                    put(
+                                                        "minecraft:destructible_by_mining",
+                                                        JSONObject().apply {
+                                                            put("seconds_to_destroy", 1.5)
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+
+                                zos.putNextEntry(ZipEntry(zipPath))
+                                zos.write(blockJson.toString(2).toByteArray(Charsets.UTF_8))
+                                zos.closeEntry()
+                                entriesWritten++
+                                totalSynthesizedBlocks++
                             }
                         }
                     }
@@ -365,7 +855,13 @@ class ModRepository(
             }
         }
 
-        return if (entriesWritten > 0) outFile else {
+        return if (entriesWritten > 0) {
+            McAddonBuildResult(
+                file = outFile,
+                synthesizedItems = totalSynthesizedItems,
+                synthesizedBlocks = totalSynthesizedBlocks
+            )
+        } else {
             outFile.delete()
             null
         }
