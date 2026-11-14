@@ -250,8 +250,13 @@ export function validateModImport(
   if (!author) {
     errors.push('El autor del mod es obligatorio.');
   }
-  if (!libraryFile || !libraryFile.endsWith('.so')) {
-    errors.push('En Android, el binario nativo del mod debe ser una librería ELF (.so).');
+  if (
+    !libraryFile ||
+    (!libraryFile.endsWith('.so') &&
+      !libraryFile.endsWith('.amethyst') &&
+      !libraryFile.endsWith('.zip'))
+  ) {
+    errors.push('El archivo del mod debe ser un paquete .amethyst, .zip o librería ELF (.so).');
   }
 
   const generatedId =
@@ -271,6 +276,11 @@ export function validateModImport(
     return { result: { valid: false, errors } };
   }
 
+  const normalizedLibrary =
+    libraryFile.endsWith('.amethyst') || libraryFile.endsWith('.zip')
+      ? `lib${generatedId.replace(/-/g, '_')}.so`
+      : libraryFile;
+
   return {
     result: { valid: true, errors: [] },
     mod: {
@@ -278,11 +288,11 @@ export function validateModImport(
       name,
       version,
       author,
-      description: input.description?.trim() || 'Mod nativo portado con AmethystAPI para Android.',
+      description: input.description?.trim() || 'Mod nativo .amethyst portado para Android.',
       targetApiVersion: input.targetApiVersion.trim() || '1.3.1',
       targetMcVersion: input.targetMcVersion.trim() || '1.21.0.3',
       abi: input.abi,
-      libraryFile,
+      libraryFile: normalizedLibrary,
       sizeKb: input.sizeKb && input.sizeKb > 0 ? input.sizeKb : 220,
       dependencies: input.dependencies ?? [],
       isUserImported: true,
@@ -439,9 +449,9 @@ export function buildLaunchSequence(
 
     steps.push({
       id: 'start-activity',
-      label: 'Lanzando Minecraft Bedrock Edition',
-      detail: `MainActivity adjuntada · Logcat ${config.keepLogcatOpen ? 'activo' : 'en segundo plano'}`,
-      command: `am start -n ${config.packageName}/com.mojang.minecraftpe.MainActivity --es amethyst_profile "${profile.id}"`,
+      label: 'Iniciando AmethystGameActivity (Host Moddeado)',
+      detail: `Host nativo com.rubenamethyst.app adjuntado a libminecraftpe.so · Logcat ${config.keepLogcatOpen ? 'activo' : 'en segundo plano'}`,
+      command: `am start -n com.rubenamethyst.app/.AmethystGameActivity --es amethyst_profile "${profile.id}"`,
       durationMs: 360,
     });
   }

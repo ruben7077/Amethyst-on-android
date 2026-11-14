@@ -41,10 +41,17 @@ class MainActivity : ComponentActivity() {
                 val uiState by viewModel.uiState.collectAsState()
                 var currentRoute by remember { mutableStateOf("launcher") }
 
+                // Usar */* permite seleccionar archivos .amethyst y .so sin que Android los bloquee
                 val importModLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.OpenDocument()
                 ) { uri: Uri? ->
                     uri?.let { viewModel.importModArchive(contentResolver, it) }
+                }
+
+                val importRuntimeLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocument()
+                ) { uri: Uri? ->
+                    uri?.let { viewModel.importRuntimeArchive(contentResolver, it) }
                 }
 
                 Scaffold(
@@ -82,7 +89,8 @@ class MainActivity : ComponentActivity() {
                             "launcher" -> LauncherScreen(
                                 state = uiState,
                                 onSelectProfile = viewModel::selectProfile,
-                                onLaunchGame = { viewModel.launchMinecraft(this@MainActivity) }
+                                onLaunchGame = { viewModel.launchMinecraft(this@MainActivity) },
+                                onDismissStatus = viewModel::clearStatusMessage
                             )
                             "profiles" -> ProfilesScreen(
                                 state = uiState,
@@ -93,13 +101,14 @@ class MainActivity : ComponentActivity() {
                             "mods" -> ModsScreen(
                                 state = uiState,
                                 onToggleMod = viewModel::toggleModForActiveProfile,
-                                onImportClick = {
-                                    importModLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
-                                }
+                                onImportClick = { importModLauncher.launch(arrayOf("*/*")) },
+                                onImportRuntimeClick = { importRuntimeLauncher.launch(arrayOf("*/*")) },
+                                onDismissStatus = viewModel::clearStatusMessage
                             )
                             "settings" -> SettingsScreen(
                                 config = uiState.config,
-                                onUpdateConfig = viewModel::updateConfig
+                                onUpdateConfig = viewModel::updateConfig,
+                                onImportRuntimeClick = { importRuntimeLauncher.launch(arrayOf("*/*")) }
                             )
                         }
                     }

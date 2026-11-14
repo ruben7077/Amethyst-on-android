@@ -25,895 +25,134 @@ export const WINDOWS_TO_ANDROID_MAPPINGS: PortMappingRow[] = [
   {
     layer: 'Inyección de Código Nativo',
     windowsOriginal: 'Win32 LoadLibraryA / Proxy DLL (dxgi.dll / vcruntime)',
-    androidPort: 'ELF dlopen() + libamethyst_loader.so (JNI_OnLoad / LD_PRELOAD)',
+    androidPort: 'ELF dlopen() + libamethyst_loader.so (AmethystGameActivity / JNI)',
     rationale:
-      'Android carga binarios ELF (.so) mediante Bionic linker en lugar de PE (.dll). Se reemplaza el proxy DLL por un loader JNI en NativeActivity.',
+      'Android carga binarios ELF (.so) mediante Bionic linker en lugar de PE (.dll) y aísla los mods en el host AmethystGameActivity.',
   },
   {
-    layer: 'Hooking C++ (AmethystAPI)',
-    windowsOriginal: 'SafetyHook / MinHook x86_64 (PDB symbols)',
-    androidPort: 'Dobby / ShadowHook arm64-v8a + tablas de símbolos ELF / pattern scan',
+    layer: 'Paquetes de Mods (.amethyst)',
+    windowsOriginal: 'Carpeta de mod + mod.json + .dll',
+    androidPort: 'Archivo .amethyst / .zip / .so extraído con ZipInputStream por ABI',
     rationale:
-      'Los dispositivos Android modernos ejecutan ARM64; Dobby y ShadowHook permiten inline hooks y PLT/GOT hooks estables en AArch64.',
+      'Desempaqueta librerías arm64-v8a / armeabi-v7a y metadatos mod.json en almacenamiento interno de la app.',
   },
   {
     layer: 'Gestión de Versiones MCBE',
     windowsOriginal: 'Microsoft Store UWP / GDK AppxManifest',
     androidPort: 'PackageManager + Split APK / OBB Manager (com.mojang.minecraftpe)',
     rationale:
-      'En Android se verifica packageName, versionCode y ABI split (config.arm64_v8a.apk) con aislamiento por perfil en scoped storage.',
+      'En Android se verifica packageName, nativeLibraryDir y ABI con aislamiento por perfil en scoped storage.',
   },
   {
     layer: 'Almacenamiento de Perfiles y Mods',
-    windowsOriginal: '%LOCALAPPDATA%\\Amethyst\\Launcher\\',
+    windowsOriginal: '%LOCALAPPDATA%\\\\Amethyst\\\\Launcher\\\\',
     androidPort: '/Android/data/com.rubenamethyst.app/files/ (Scoped Storage + SAF)',
     rationale:
-      'Cumple con Android 11+ Scoped Storage e importa archivos .zip / .so / mod.json usando Storage Access Framework (ACTION_OPEN_DOCUMENT).',
+      'Cumple con Android 11+ Scoped Storage e importa archivos .amethyst / .zip / .so usando Storage Access Framework.',
   },
 ];
 
 export const ANDROID_PORT_FILES: AndroidSourceFile[] = [
   {
-    path: 'app/src/main/java/com/rubenamethyst/app/MainActivity.kt',
-    language: 'kotlin',
-    summary: 'Punto de entrada Jetpack Compose (com.rubenamethyst.app) con barra inferior táctil e importación SAF.',
-    content: `package com.rubenamethyst.app
-
-import android.net.Uri
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import com.rubenamethyst.app.ui.AmethystTheme
-import com.rubenamethyst.app.ui.LauncherScreen
-import com.rubenamethyst.app.ui.ModsScreen
-import com.rubenamethyst.app.ui.ProfilesScreen
-import com.rubenamethyst.app.ui.SettingsScreen
-
-class MainActivity : ComponentActivity() {
-    private val viewModel: AmethystLauncherViewModel by viewModels()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            AmethystTheme {
-                val uiState by viewModel.uiState.collectAsState()
-                var currentRoute by remember { mutableStateOf("launcher") }
-
-                val importModLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.OpenDocument()
-                ) { uri: Uri? ->
-                    uri?.let { viewModel.importModArchive(contentResolver, it) }
-                }
-
-                Scaffold(
-                    bottomBar = {
-                        NavigationBar {
-                            NavigationBarItem(
-                                selected = currentRoute == "launcher",
-                                onClick = { currentRoute = "launcher" },
-                                label = { Text("Jugar") },
-                                icon = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) }
-                            )
-                            NavigationBarItem(
-                                selected = currentRoute == "profiles",
-                                onClick = { currentRoute = "profiles" },
-                                label = { Text("Perfiles") },
-                                icon = { Icon(Icons.Rounded.Layers, contentDescription = null) }
-                            )
-                            NavigationBarItem(
-                                selected = currentRoute == "mods",
-                                onClick = { currentRoute = "mods" },
-                                label = { Text("Mods") },
-                                icon = { Icon(Icons.Rounded.Extension, contentDescription = null) }
-                            )
-                            NavigationBarItem(
-                                selected = currentRoute == "settings",
-                                onClick = { currentRoute = "settings" },
-                                label = { Text("Ajustes") },
-                                icon = { Icon(Icons.Rounded.Settings, contentDescription = null) }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding)) {
-                        when (currentRoute) {
-                            "launcher" -> LauncherScreen(
-                                state = uiState,
-                                onSelectProfile = viewModel::selectProfile,
-                                onLaunchGame = { viewModel.launchMinecraft(this@MainActivity) }
-                            )
-                            "profiles" -> ProfilesScreen(
-                                state = uiState,
-                                onSelectProfile = viewModel::selectProfile,
-                                onSaveProfile = viewModel::saveProfile,
-                                onDeleteProfile = viewModel::deleteProfile
-                            )
-                            "mods" -> ModsScreen(
-                                state = uiState,
-                                onToggleMod = viewModel::toggleModForActiveProfile,
-                                onImportClick = {
-                                    importModLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
-                                }
-                            )
-                            "settings" -> SettingsScreen(
-                                config = uiState.config,
-                                onUpdateConfig = viewModel::updateConfig
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/MainActivity.kt",
+    "language": "kotlin",
+    "summary": "Selector de archivos */* compatible con .amethyst, .so, .zip y .json.",
+    "content": "package com.rubenamethyst.app\n\nimport android.net.Uri\nimport android.os.Bundle\nimport androidx.activity.ComponentActivity\nimport androidx.activity.compose.rememberLauncherForActivityResult\nimport androidx.activity.compose.setContent\nimport androidx.activity.result.contract.ActivityResultContracts\nimport androidx.activity.viewModels\nimport androidx.compose.foundation.layout.Box\nimport androidx.compose.foundation.layout.padding\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.rounded.Extension\nimport androidx.compose.material.icons.rounded.Layers\nimport androidx.compose.material.icons.rounded.PlayArrow\nimport androidx.compose.material.icons.rounded.Settings\nimport androidx.compose.material3.Icon\nimport androidx.compose.material3.NavigationBar\nimport androidx.compose.material3.NavigationBarItem\nimport androidx.compose.material3.Scaffold\nimport androidx.compose.material3.Text\nimport androidx.compose.runtime.collectAsState\nimport androidx.compose.runtime.getValue\nimport androidx.compose.runtime.mutableStateOf\nimport androidx.compose.runtime.remember\nimport androidx.compose.runtime.setValue\nimport androidx.compose.ui.Modifier\nimport com.rubenamethyst.app.ui.AmethystTheme\nimport com.rubenamethyst.app.ui.LauncherScreen\nimport com.rubenamethyst.app.ui.ModsScreen\nimport com.rubenamethyst.app.ui.ProfilesScreen\nimport com.rubenamethyst.app.ui.SettingsScreen\n\nclass MainActivity : ComponentActivity() {\n    private val viewModel: AmethystLauncherViewModel by viewModels()\n\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n        setContent {\n            AmethystTheme {\n                val uiState by viewModel.uiState.collectAsState()\n                var currentRoute by remember { mutableStateOf(\"launcher\") }\n\n                // Usar */* permite seleccionar archivos .amethyst y .so sin que Android los bloquee\n                val importModLauncher = rememberLauncherForActivityResult(\n                    contract = ActivityResultContracts.OpenDocument()\n                ) { uri: Uri? ->\n                    uri?.let { viewModel.importModArchive(contentResolver, it) }\n                }\n\n                val importRuntimeLauncher = rememberLauncherForActivityResult(\n                    contract = ActivityResultContracts.OpenDocument()\n                ) { uri: Uri? ->\n                    uri?.let { viewModel.importRuntimeArchive(contentResolver, it) }\n                }\n\n                Scaffold(\n                    bottomBar = {\n                        NavigationBar {\n                            NavigationBarItem(\n                                selected = currentRoute == \"launcher\",\n                                onClick = { currentRoute = \"launcher\" },\n                                label = { Text(\"Jugar\") },\n                                icon = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) }\n                            )\n                            NavigationBarItem(\n                                selected = currentRoute == \"profiles\",\n                                onClick = { currentRoute = \"profiles\" },\n                                label = { Text(\"Perfiles\") },\n                                icon = { Icon(Icons.Rounded.Layers, contentDescription = null) }\n                            )\n                            NavigationBarItem(\n                                selected = currentRoute == \"mods\",\n                                onClick = { currentRoute = \"mods\" },\n                                label = { Text(\"Mods\") },\n                                icon = { Icon(Icons.Rounded.Extension, contentDescription = null) }\n                            )\n                            NavigationBarItem(\n                                selected = currentRoute == \"settings\",\n                                onClick = { currentRoute = \"settings\" },\n                                label = { Text(\"Ajustes\") },\n                                icon = { Icon(Icons.Rounded.Settings, contentDescription = null) }\n                            )\n                        }\n                    }\n                ) { padding ->\n                    Box(modifier = Modifier.padding(padding)) {\n                        when (currentRoute) {\n                            \"launcher\" -> LauncherScreen(\n                                state = uiState,\n                                onSelectProfile = viewModel::selectProfile,\n                                onLaunchGame = { viewModel.launchMinecraft(this@MainActivity) },\n                                onDismissStatus = viewModel::clearStatusMessage\n                            )\n                            \"profiles\" -> ProfilesScreen(\n                                state = uiState,\n                                onSelectProfile = viewModel::selectProfile,\n                                onSaveProfile = viewModel::saveProfile,\n                                onDeleteProfile = viewModel::deleteProfile\n                            )\n                            \"mods\" -> ModsScreen(\n                                state = uiState,\n                                onToggleMod = viewModel::toggleModForActiveProfile,\n                                onImportClick = { importModLauncher.launch(arrayOf(\"*/*\")) },\n                                onImportRuntimeClick = { importRuntimeLauncher.launch(arrayOf(\"*/*\")) },\n                                onDismissStatus = viewModel::clearStatusMessage\n                            )\n                            \"settings\" -> SettingsScreen(\n                                config = uiState.config,\n                                onUpdateConfig = viewModel::updateConfig,\n                                onImportRuntimeClick = { importRuntimeLauncher.launch(arrayOf(\"*/*\")) }\n                            )\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/rubenamethyst/app/AmethystLauncherViewModel.kt',
-    language: 'kotlin',
-    summary: 'Orquestación de perfiles, validación ABI arm64-v8a e inicio de com.mojang.minecraftpe.',
-    content: `package com.rubenamethyst.app
-
-import android.app.Application
-import android.content.ContentResolver
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import java.io.File
-
-class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
-    private val repository = ModRepository(app.getExternalFilesDir(null) ?: app.filesDir)
-    private val _uiState = MutableStateFlow(repository.loadInitialState())
-    val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()
-
-    companion object {
-        init {
-            System.loadLibrary("amethyst_loader")
-        }
-    }
-
-    fun detectDeviceAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-
-    fun isMinecraftInstalled(context: Context, packageName: String): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(packageName, PackageManager.GET_META_DATA)
-            true
-        } catch (_: PackageManager.NameNotFoundException) {
-            false
-        }
-    }
-
-    fun selectProfile(profileId: String) {
-        _uiState.value = _uiState.value.copy(activeProfileId = profileId)
-        repository.persistState(_uiState.value)
-    }
-
-    fun saveProfile(profile: ProfileEntry) {
-        val current = _uiState.value.profiles
-        val updated = if (current.any { it.id == profile.id }) {
-            current.map { if (it.id == profile.id) profile else it }
-        } else {
-            listOf(profile) + current
-        }
-        _uiState.value = _uiState.value.copy(profiles = updated, activeProfileId = profile.id)
-        repository.persistState(_uiState.value)
-    }
-
-    fun deleteProfile(profileId: String) {
-        val current = _uiState.value.profiles
-        if (current.size <= 1) return
-        val remaining = current.filterNot { it.id == profileId }
-        val nextActive = if (_uiState.value.activeProfileId == profileId) remaining.first().id else _uiState.value.activeProfileId
-        _uiState.value = _uiState.value.copy(profiles = remaining, activeProfileId = nextActive)
-        repository.persistState(_uiState.value)
-    }
-
-    fun toggleModForActiveProfile(modId: String) {
-        val activeId = _uiState.value.activeProfileId
-        val updated = _uiState.value.profiles.map { profile ->
-            if (profile.id != activeId) profile
-            else if (profile.modIds.contains(modId)) profile.copy(modIds = profile.modIds - modId)
-            else profile.copy(modIds = profile.modIds + modId)
-        }
-        _uiState.value = _uiState.value.copy(profiles = updated)
-        repository.persistState(_uiState.value)
-    }
-
-    fun updateConfig(config: AndroidPortConfig) {
-        _uiState.value = _uiState.value.copy(config = config)
-        repository.persistState(_uiState.value)
-    }
-
-    fun launchMinecraft(context: Context) {
-        viewModelScope.launch {
-            val state = _uiState.value
-            val profile = state.activeProfile ?: return@launch
-            val configDir = File(context.getExternalFilesDir(null), "runtime_bridge")
-            configDir.mkdirs()
-
-            repository.writeRuntimeManifest(
-                targetFile = File(configDir, "active_profile.json"),
-                profile = profile,
-                mods = state.activeMods
-            )
-
-            val launchIntent = context.packageManager.getLaunchIntentForPackage(state.config.packageName)
-                ?: Intent().apply {
-                    setClassName(state.config.packageName, "com.mojang.minecraftpe.MainActivity")
-                }
-
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            launchIntent.putExtra("amethyst_profile_id", profile.id)
-            launchIntent.putExtra("amethyst_manifest_path", File(configDir, "active_profile.json").absolutePath)
-            context.startActivity(launchIntent)
-        }
-    }
-
-    fun importModArchive(resolver: ContentResolver, uri: Uri) {
-        viewModelScope.launch {
-            val imported = repository.extractAndValidateMod(resolver, uri, detectDeviceAbi())
-            if (imported != null) {
-                val updated = _uiState.value.mods + imported
-                _uiState.value = _uiState.value.copy(mods = updated)
-                repository.persistState(_uiState.value)
-            }
-        }
-    }
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/AmethystLauncherViewModel.kt",
+    "language": "kotlin",
+    "summary": "Orquestación de mods .amethyst, runtime .so e inicio de AmethystGameActivity para perfiles moddeados.",
+    "content": "package com.rubenamethyst.app\n\nimport android.app.Application\nimport android.content.ContentResolver\nimport android.content.Context\nimport android.content.Intent\nimport android.content.pm.PackageManager\nimport android.net.Uri\nimport android.os.Build\nimport androidx.lifecycle.AndroidViewModel\nimport androidx.lifecycle.viewModelScope\nimport kotlinx.coroutines.Dispatchers\nimport kotlinx.coroutines.flow.MutableStateFlow\nimport kotlinx.coroutines.flow.StateFlow\nimport kotlinx.coroutines.flow.asStateFlow\nimport kotlinx.coroutines.launch\nimport kotlinx.coroutines.withContext\nimport java.io.File\n\nclass AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {\n    private val repository = ModRepository(app.getExternalFilesDir(null) ?: app.filesDir)\n    private val _uiState = MutableStateFlow(repository.loadInitialState())\n    val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()\n\n    init {\n        AmethystNativeBridge.ensureLoaded()\n    }\n\n    fun detectDeviceAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: \"arm64-v8a\"\n\n    fun clearStatusMessage() {\n        _uiState.value = _uiState.value.copy(statusMessage = null)\n    }\n\n    fun selectProfile(profileId: String) {\n        _uiState.value = _uiState.value.copy(activeProfileId = profileId, statusMessage = null)\n        repository.persistState(_uiState.value)\n    }\n\n    fun saveProfile(profile: ProfileEntry) {\n        val current = _uiState.value.profiles\n        val updated = if (current.any { it.id == profile.id }) {\n            current.map { if (it.id == profile.id) profile else it }\n        } else {\n            listOf(profile) + current\n        }\n        _uiState.value = _uiState.value.copy(\n            profiles = updated,\n            activeProfileId = profile.id,\n            statusMessage = \"Perfil guardado: ${profile.name}\"\n        )\n        repository.persistState(_uiState.value)\n    }\n\n    fun deleteProfile(profileId: String) {\n        val current = _uiState.value.profiles\n        if (current.size <= 1) return\n        val remaining = current.filterNot { it.id == profileId }\n        val nextActive = if (_uiState.value.activeProfileId == profileId) remaining.first().id else _uiState.value.activeProfileId\n        _uiState.value = _uiState.value.copy(profiles = remaining, activeProfileId = nextActive)\n        repository.persistState(_uiState.value)\n    }\n\n    fun toggleModForActiveProfile(modId: String) {\n        val activeId = _uiState.value.activeProfileId\n        val updated = _uiState.value.profiles.map { profile ->\n            if (profile.id != activeId) profile\n            else if (profile.modIds.contains(modId)) profile.copy(modIds = profile.modIds - modId)\n            else profile.copy(modIds = profile.modIds + modId)\n        }\n        _uiState.value = _uiState.value.copy(profiles = updated)\n        repository.persistState(_uiState.value)\n    }\n\n    fun updateConfig(config: AndroidPortConfig) {\n        _uiState.value = _uiState.value.copy(config = config)\n        repository.persistState(_uiState.value)\n    }\n\n    fun launchMinecraft(context: Context) {\n        val state = _uiState.value\n        val profile = state.activeProfile ?: return\n\n        // Si el perfil es Vanilla, abre Minecraft Bedrock directamente\n        if (profile.runtimeId == \"vanilla\") {\n            val vanillaIntent = context.packageManager.getLaunchIntentForPackage(state.config.packageName)\n            if (vanillaIntent != null) {\n                vanillaIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)\n                context.startActivity(vanillaIntent)\n            } else {\n                _uiState.value = state.copy(\n                    statusMessage = \"No se encontró instalado ${state.config.packageName} en el dispositivo.\"\n                )\n            }\n            return\n        }\n\n        // Perfil Amethyst moddeado: preparar manifiesto y abrir AmethystGameActivity (nunca abrir Vanilla en silencio)\n        val configDir = File(context.getExternalFilesDir(null), \"runtime_bridge\")\n        configDir.mkdirs()\n        repository.writeRuntimeManifest(\n            targetFile = File(configDir, \"active_profile.json\"),\n            profile = profile,\n            mods = state.activeMods\n        )\n\n        val mcNativeDir = try {\n            context.packageManager.getApplicationInfo(state.config.packageName, 0).nativeLibraryDir ?: \"\"\n        } catch (_: PackageManager.NameNotFoundException) {\n            \"\"\n        }\n\n        val modPaths = state.activeMods\n            .map { it.localPath }\n            .filter { it.isNotBlank() }\n            .toTypedArray()\n\n        val hostIntent = Intent(context, AmethystGameActivity::class.java).apply {\n            putExtra(\"amethyst_profile_name\", profile.name)\n            putExtra(\"amethyst_mc_version\", profile.mcVersion)\n            putExtra(\"amethyst_mc_package\", state.config.packageName)\n            putExtra(\"amethyst_mc_native_dir\", mcNativeDir)\n            putExtra(\"amethyst_runtime_so\", state.config.runtimePath)\n            putExtra(\"amethyst_mod_paths\", modPaths)\n        }\n        context.startActivity(hostIntent)\n    }\n\n    fun importModArchive(resolver: ContentResolver, uri: Uri) {\n        viewModelScope.launch {\n            val result = withContext(Dispatchers.IO) {\n                repository.extractAndValidateMod(resolver, uri, detectDeviceAbi())\n            }\n            result.onSuccess { imported ->\n                val currentMods = _uiState.value.mods.filterNot { it.id == imported.id } + imported\n                val activeId = _uiState.value.activeProfileId\n                val updatedProfiles = _uiState.value.profiles.map { profile ->\n                    if (profile.id == activeId && !profile.modIds.contains(imported.id)) {\n                        profile.copy(modIds = profile.modIds + imported.id)\n                    } else {\n                        profile\n                    }\n                }\n                _uiState.value = _uiState.value.copy(\n                    mods = currentMods,\n                    profiles = updatedProfiles,\n                    statusMessage = \"Mod ${imported.sourceFormat} importado y activado: ${imported.name} (${imported.libraryFile})\"\n                )\n                repository.persistState(_uiState.value)\n            }.onFailure { err ->\n                _uiState.value = _uiState.value.copy(\n                    statusMessage = \"Error al importar mod: ${err.message ?: \"archivo inválido\"}\"\n                )\n            }\n        }\n    }\n\n    fun importRuntimeArchive(resolver: ContentResolver, uri: Uri) {\n        viewModelScope.launch {\n            val result = withContext(Dispatchers.IO) {\n                repository.importRuntimeSo(resolver, uri)\n            }\n            result.onSuccess { file ->\n                val updatedConfig = _uiState.value.config.copy(runtimePath = file.absolutePath)\n                _uiState.value = _uiState.value.copy(\n                    config = updatedConfig,\n                    statusMessage = \"Runtime cargado: ${file.name}\"\n                )\n                repository.persistState(_uiState.value)\n            }.onFailure { err ->\n                _uiState.value = _uiState.value.copy(\n                    statusMessage = \"Error al importar runtime: ${err.message}\"\n                )\n            }\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/rubenamethyst/app/Models.kt',
-    language: 'kotlin',
-    summary: 'Modelos de datos Kotlin para perfiles, mods ELF (.so), runtimes y configuración Android.',
-    content: `package com.rubenamethyst.app
-
-data class ModEntry(
-    val id: String,
-    val name: String,
-    val version: String,
-    val author: String,
-    val abi: String,
-    val libraryFile: String,
-    val targetMcVersion: String
-)
-
-data class ProfileEntry(
-    val id: String,
-    val name: String,
-    val mcVersion: String,
-    val runtimeId: String,
-    val modIds: List<String>
-)
-
-data class AndroidPortConfig(
-    val targetAbi: String = "arm64-v8a",
-    val packageName: String = "com.mojang.minecraftpe",
-    val storagePath: String = "/Android/data/com.rubenamethyst.app/files",
-    val verifyAbiOnLaunch: Boolean = true
-)
-
-data class LauncherUiState(
-    val activeProfileId: String,
-    val profiles: List<ProfileEntry>,
-    val mods: List<ModEntry>,
-    val config: AndroidPortConfig
-) {
-    val activeProfile: ProfileEntry?
-        get() = profiles.firstOrNull { it.id == activeProfileId }
-
-    val activeMods: List<ModEntry>
-        get() {
-            val profile = activeProfile ?: return emptyList()
-            if (profile.runtimeId == "vanilla") return emptyList()
-            return mods.filter { profile.modIds.contains(it.id) }
-        }
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/AmethystNativeBridge.kt",
+    "language": "kotlin",
+    "summary": "Puente JNI hacia libamethyst_loader.so (nativeBootstrapMods).",
+    "content": "package com.rubenamethyst.app\n\nobject AmethystNativeBridge {\n    init {\n        System.loadLibrary(\"amethyst_loader\")\n    }\n\n    fun ensureLoaded() {\n        // Dispara el bloque init para cargar libamethyst_loader.so\n    }\n\n    external fun nativeBootstrapMods(\n        mcNativeDir: String,\n        runtimeSoPath: String,\n        modSoPaths: Array<String>,\n        mcVersion: String\n    ): String\n}\n"
   },
   {
-    path: 'app/src/main/java/com/rubenamethyst/app/ModRepository.kt',
-    language: 'kotlin',
-    summary: 'Persistencia en scoped storage y escritura del manifiesto active_profile.json para JNI.',
-    content: `package com.rubenamethyst.app
-
-import android.content.ContentResolver
-import android.net.Uri
-import android.provider.OpenableColumns
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
-
-class ModRepository(private val baseDir: File) {
-    private val stateFile = File(baseDir, "launcher_state.json")
-
-    fun loadInitialState(): LauncherUiState {
-        val defaultMods = listOf(
-            ModEntry(
-                id = "amethyst-dev-tools",
-                name = "Amethyst Dev Overlay",
-                version = "1.4.0",
-                author = "FrederoxDev",
-                abi = "arm64-v8a",
-                libraryFile = "libamethyst_dev_overlay.so",
-                targetMcVersion = "1.21.0.3"
-            ),
-            ModEntry(
-                id = "bedrock-fov-unlocker",
-                name = "Dynamic FOV & Camera",
-                version = "2.1.0",
-                author = "AmethystCommunity",
-                abi = "arm64-v8a",
-                libraryFile = "libdynamic_fov.so",
-                targetMcVersion = "1.21.0.3"
-            )
-        )
-        val defaultProfiles = listOf(
-            ProfileEntry(
-                id = "profile-amethyst-121",
-                name = "Amethyst 1.21",
-                mcVersion = "1.21.0.3",
-                runtimeId = "amethyst-1.3.1",
-                modIds = listOf("amethyst-dev-tools", "bedrock-fov-unlocker")
-            ),
-            ProfileEntry(
-                id = "profile-vanilla-121",
-                name = "Vanilla 1.21",
-                mcVersion = "1.21.2.2",
-                runtimeId = "vanilla",
-                modIds = emptyList()
-            )
-        )
-        return LauncherUiState(
-            activeProfileId = "profile-amethyst-121",
-            profiles = defaultProfiles,
-            mods = defaultMods,
-            config = AndroidPortConfig()
-        )
-    }
-
-    fun persistState(state: LauncherUiState) {
-        baseDir.mkdirs()
-        val json = JSONObject().apply {
-            put("activeProfileId", state.activeProfileId)
-            put("packageName", state.config.packageName)
-            put("targetAbi", state.config.targetAbi)
-        }
-        stateFile.writeText(json.toString(2))
-    }
-
-    fun writeRuntimeManifest(targetFile: File, profile: ProfileEntry, mods: List<ModEntry>) {
-        val modsArray = JSONArray()
-        mods.forEach { mod ->
-            modsArray.put(JSONObject().apply {
-                put("id", mod.id)
-                put("libraryFile", mod.libraryFile)
-                put("abi", mod.abi)
-            })
-        }
-        val payload = JSONObject().apply {
-            put("profileId", profile.id)
-            put("mcVersion", profile.mcVersion)
-            put("runtimeId", profile.runtimeId)
-            put("mods", modsArray)
-        }
-        targetFile.writeText(payload.toString(2))
-    }
-
-    fun extractAndValidateMod(resolver: ContentResolver, uri: Uri, abi: String): ModEntry? {
-        var displayName = "imported_mod.so"
-        resolver.query(uri, null, null, null, null)?.use { cursor ->
-            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (idx >= 0 && cursor.moveToFirst()) {
-                displayName = cursor.getString(idx) ?: displayName
-            }
-        }
-        if (!displayName.endsWith(".so") && !displayName.endsWith(".zip")) return null
-        val modsDir = File(baseDir, "mods").apply { mkdirs() }
-        val outFile = File(modsDir, displayName)
-        resolver.openInputStream(uri)?.use { input ->
-            outFile.outputStream().use { output -> input.copyTo(output) }
-        }
-        val cleanName = displayName.removePrefix("lib").substringBeforeLast(".")
-        return ModEntry(
-            id = cleanName.lowercase().replace(Regex("[^a-z0-9]+"), "-"),
-            name = cleanName.replace('_', ' '),
-            version = "1.0.0",
-            author = "LocalImport",
-            abi = abi,
-            libraryFile = if (displayName.endsWith(".so")) displayName else "lib\${cleanName}.so",
-            targetMcVersion = "1.21.0.3"
-        )
-    }
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/AmethystGameActivity.kt",
+    "language": "kotlin",
+    "summary": "Host nativo Amethyst que ejecuta dlopen() y evita abrir Minecraft Vanilla en silencio.",
+    "content": "package com.rubenamethyst.app\n\nimport android.content.Intent\nimport android.os.Bundle\nimport androidx.activity.ComponentActivity\nimport androidx.activity.compose.setContent\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.rememberScrollState\nimport androidx.compose.foundation.verticalScroll\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.*\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.text.font.FontFamily\nimport androidx.compose.ui.unit.dp\nimport com.rubenamethyst.app.ui.AmethystTheme\n\nclass AmethystGameActivity : ComponentActivity() {\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n\n        val profileName = intent.getStringExtra(\"amethyst_profile_name\") ?: \"Amethyst\"\n        val mcVersion = intent.getStringExtra(\"amethyst_mc_version\") ?: \"1.21.0.3\"\n        val mcPackage = intent.getStringExtra(\"amethyst_mc_package\") ?: \"com.mojang.minecraftpe\"\n        val mcNativeDir = intent.getStringExtra(\"amethyst_mc_native_dir\") ?: \"\"\n        val runtimeSoPath = intent.getStringExtra(\"amethyst_runtime_so\") ?: \"\"\n        val modSoPaths = intent.getStringArrayExtra(\"amethyst_mod_paths\") ?: emptyArray()\n\n        val report = AmethystNativeBridge.nativeBootstrapMods(\n            mcNativeDir = mcNativeDir,\n            runtimeSoPath = runtimeSoPath,\n            modSoPaths = modSoPaths,\n            mcVersion = mcVersion\n        )\n\n        val canTryExternalPatched = report.contains(\"RUNTIME_OK\") && !report.contains(\"MOD_ERROR\")\n\n        setContent {\n            AmethystTheme {\n                Surface(modifier = Modifier.fillMaxSize()) {\n                    Column(\n                        modifier = Modifier\n                            .fillMaxSize()\n                            .padding(20.dp)\n                            .verticalScroll(rememberScrollState()),\n                        verticalArrangement = Arrangement.spacedBy(14.dp)\n                    ) {\n                        Text(\n                            text = \"Amethyst Host · $profileName\",\n                            style = MaterialTheme.typography.headlineSmall\n                        )\n                        Text(\n                            text = \"MCBE $mcVersion · Paquete base: $mcPackage\",\n                            style = MaterialTheme.typography.bodyMedium\n                        )\n\n                        Card(modifier = Modifier.fillMaxWidth()) {\n                            Column(modifier = Modifier.padding(16.dp)) {\n                                Text(\n                                    text = \"Diagnóstico nativo (dlopen / JNI)\",\n                                    style = MaterialTheme.typography.titleMedium\n                                )\n                                Spacer(modifier = Modifier.height(8.dp))\n                                Text(\n                                    text = report,\n                                    fontFamily = FontFamily.Monospace,\n                                    style = MaterialTheme.typography.bodySmall\n                                )\n                            }\n                        }\n\n                        if (!canTryExternalPatched) {\n                            Text(\n                                text = \"Amethyst no inició el Minecraft normal para evitar abrir una sesión sin mods. Verifica que importaste libamethyst_runtime.so y tus mods .amethyst / .so para tu arquitectura.\",\n                                style = MaterialTheme.typography.bodySmall\n                            )\n                        } else {\n                            Button(\n                                onClick = {\n                                    val launchIntent = packageManager.getLaunchIntentForPackage(mcPackage)\n                                        ?: Intent().apply {\n                                            setClassName(mcPackage, \"com.mojang.minecraftpe.MainActivity\")\n                                        }\n                                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)\n                                    startActivity(launchIntent)\n                                },\n                                modifier = Modifier.fillMaxWidth()\n                            ) {\n                                Text(\"Continuar al cliente Minecraft parcheado\")\n                            }\n                        }\n\n                        OutlinedButton(\n                            onClick = { finish() },\n                            modifier = Modifier.fillMaxWidth()\n                        ) {\n                            Text(\"Volver al Launcher\")\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/rubenamethyst/app/ui/Screens.kt',
-    language: 'kotlin',
-    summary: 'Pantallas Jetpack Compose (Theme, LauncherScreen, ProfilesScreen, ModsScreen, SettingsScreen).',
-    content: `package com.rubenamethyst.app.ui
-
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import com.rubenamethyst.app.AndroidPortConfig
-import com.rubenamethyst.app.LauncherUiState
-import com.rubenamethyst.app.ProfileEntry
-
-private val AmethystColors = darkColorScheme(
-    primary = Color(0xFF8B5CF6),
-    background = Color(0xFF0B0A10),
-    surface = Color(0xFF13111C),
-    onPrimary = Color.White,
-    onBackground = Color(0xFFEDE9F6),
-    onSurface = Color(0xFFEDE9F6)
-)
-
-@Composable
-fun AmethystTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = AmethystColors, content = content)
-}
-
-@Composable
-fun LauncherScreen(
-    state: LauncherUiState,
-    onSelectProfile: (String) -> Unit,
-    onLaunchGame: () -> Unit
-) {
-    val active = state.activeProfile
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Amethyst Launcher", style = MaterialTheme.typography.headlineMedium)
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(active?.name ?: "Sin perfil", style = MaterialTheme.typography.titleLarge)
-                Text("MCBE \${active?.mcVersion ?: "-"} · \${active?.runtimeId ?: "-"} · \${state.activeMods.size} mods")
-                Button(onClick = onLaunchGame, modifier = Modifier.fillMaxWidth()) {
-                    Text("Iniciar Minecraft")
-                }
-            }
-        }
-        Text("Cambiar perfil rápido", style = MaterialTheme.typography.titleSmall)
-        state.profiles.forEach { profile ->
-            OutlinedButton(
-                onClick = { onSelectProfile(profile.id) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("\${profile.name} (\${profile.mcVersion})")
-            }
-        }
-    }
-}
-
-@Composable
-fun ProfilesScreen(
-    state: LauncherUiState,
-    onSelectProfile: (String) -> Unit,
-    onSaveProfile: (ProfileEntry) -> Unit,
-    onDeleteProfile: (String) -> Unit
-) {
-    var newName by remember { mutableStateOf("") }
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Perfiles", style = MaterialTheme.typography.headlineMedium)
-        OutlinedTextField(
-            value = newName,
-            onValueChange = { newName = it },
-            label = { Text("Nuevo perfil") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Button(
-            onClick = {
-                if (newName.isNotBlank()) {
-                    onSaveProfile(ProfileEntry("profile-\${System.currentTimeMillis()}", newName.trim(), "1.21.0.3", "amethyst-1.3.1", emptyList()))
-                    newName = ""
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Crear Perfil")
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.profiles) { profile ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text(profile.name, style = MaterialTheme.typography.titleMedium)
-                            Text("MCBE \${profile.mcVersion} · \${profile.runtimeId}")
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { onSelectProfile(profile.id) }) { Text("Usar") }
-                            TextButton(onClick = { onDeleteProfile(profile.id) }) { Text("Eliminar") }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ModsScreen(
-    state: LauncherUiState,
-    onToggleMod: (String) -> Unit,
-    onImportClick: () -> Unit
-) {
-    val activeIds = state.activeProfile?.modIds ?: emptyList()
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Mods (.so)", style = MaterialTheme.typography.headlineMedium)
-            Button(onClick = onImportClick) { Text("Importar") }
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.mods) { mod ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(mod.name, style = MaterialTheme.typography.titleMedium)
-                            Text("\${mod.libraryFile} · \${mod.abi} · v\${mod.version}")
-                        }
-                        Switch(checked = activeIds.contains(mod.id), onCheckedChange = { onToggleMod(mod.id) })
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsScreen(
-    config: AndroidPortConfig,
-    onUpdateConfig: (AndroidPortConfig) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Ajustes Android", style = MaterialTheme.typography.headlineMedium)
-        Text("Application ID: com.rubenamethyst.app")
-        Text("Paquete objetivo: \${config.packageName}")
-        Text("Ruta scoped: \${config.storagePath}")
-        Text("ABI: \${config.targetAbi}")
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Verificar ABI antes de iniciar")
-            Switch(
-                checked = config.verifyAbiOnLaunch,
-                onCheckedChange = { onUpdateConfig(config.copy(verifyAbiOnLaunch = it)) }
-            )
-        }
-    }
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/Models.kt",
+    "language": "kotlin",
+    "summary": "Modelos Kotlin con rutas locales de mods .amethyst, runtimePath y estado.",
+    "content": "package com.rubenamethyst.app\n\ndata class ModEntry(\n    val id: String,\n    val name: String,\n    val version: String,\n    val author: String,\n    val abi: String,\n    val libraryFile: String,\n    val targetMcVersion: String,\n    val localPath: String = \"\",\n    val sourceFormat: String = \".so\"\n)\n\ndata class ProfileEntry(\n    val id: String,\n    val name: String,\n    val mcVersion: String,\n    val runtimeId: String,\n    val modIds: List<String>\n)\n\ndata class AndroidPortConfig(\n    val targetAbi: String = \"arm64-v8a\",\n    val packageName: String = \"com.mojang.minecraftpe\",\n    val storagePath: String = \"/Android/data/com.rubenamethyst.app/files\",\n    val runtimePath: String = \"\",\n    val verifyAbiOnLaunch: Boolean = true\n)\n\ndata class LauncherUiState(\n    val activeProfileId: String,\n    val profiles: List<ProfileEntry>,\n    val mods: List<ModEntry>,\n    val config: AndroidPortConfig,\n    val statusMessage: String? = null,\n    val lastLaunchReport: String? = null\n) {\n    val activeProfile: ProfileEntry?\n        get() = profiles.firstOrNull { it.id == activeProfileId }\n\n    val activeMods: List<ModEntry>\n        get() {\n            val profile = activeProfile ?: return emptyList()\n            if (profile.runtimeId == \"vanilla\") return emptyList()\n            return mods.filter { profile.modIds.contains(it.id) }\n        }\n}\n"
   },
   {
-    path: 'app/src/main/cpp/amethyst_loader.cpp',
-    language: 'cpp',
-    summary: 'Cargador nativo NDK/JNI que reemplaza LoadLibraryA de Windows por dlopen() de Android y hooks AArch64.',
-    content: `#include <jni.h>
-#include <dlfcn.h>
-#include <android/log.h>
-#include <string>
-#include <vector>
-
-#define LOG_TAG "AmethystLoader"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-namespace amethyst::android {
-
-struct ModDescriptor {
-    std::string id;
-    std::string soPath;
-};
-
-using AmethystModInitFn = void (*)(const char* mcVersion, void* libMinecraftHandle);
-
-bool LoadNativeLibrary(const std::string& path, void** outHandle) {
-    void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
-    if (!handle) {
-        LOGE("Error cargando %s: %s", path.c_str(), dlerror());
-        return false;
-    }
-    *outHandle = handle;
-    LOGI("Libreria ELF cargada: %s", path.c_str());
-    return true;
-}
-
-void BootstrapAmethystRuntime(
-    const std::string& runtimeSoPath,
-    const std::vector<ModDescriptor>& mods,
-    const std::string& mcVersion
-) {
-    void* mcHandle = dlopen("libminecraftpe.so", RTLD_NOLOAD);
-    if (!mcHandle) {
-        mcHandle = dlopen("libminecraftpe.so", RTLD_LAZY);
-    }
-
-    void* runtimeHandle = nullptr;
-    if (!LoadNativeLibrary(runtimeSoPath, &runtimeHandle)) {
-        LOGE("Abortando bootstrap: fallo al cargar AmethystRuntime.");
-        return;
-    }
-
-    for (const auto& mod : mods) {
-        void* modHandle = nullptr;
-        if (!LoadNativeLibrary(mod.soPath, &modHandle)) continue;
-
-        auto initFn = reinterpret_cast<AmethystModInitFn>(dlsym(modHandle, "Initialize"));
-        if (initFn) {
-            LOGI("Inicializando mod %s para MCBE %s", mod.id.c_str(), mcVersion.c_str());
-            initFn(mcVersion.c_str(), mcHandle);
-        } else {
-            LOGE("El mod %s no exporta el simbolo Initialize()", mod.id.c_str());
-        }
-    }
-}
-
-} // namespace amethyst::android
-
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
-    LOGI("AmethystLoader (com.rubenamethyst.app) inicializado en Android");
-    return JNI_VERSION_1_6;
-}
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/ModRepository.kt",
+    "language": "kotlin",
+    "summary": "Persistencia real en launcher_state.json y extractor ZIP/ELF/JSON para mods .amethyst.",
+    "content": "package com.rubenamethyst.app\n\nimport android.content.ContentResolver\nimport android.net.Uri\nimport android.provider.OpenableColumns\nimport org.json.JSONArray\nimport org.json.JSONObject\nimport java.io.File\nimport java.util.zip.ZipInputStream\n\nclass ModRepository(private val baseDir: File) {\n    private val stateFile = File(baseDir, \"launcher_state.json\")\n\n    fun loadInitialState(): LauncherUiState {\n        if (stateFile.exists()) {\n            try {\n                val root = JSONObject(stateFile.readText())\n                val activeProfileId = root.optString(\"activeProfileId\", \"profile-amethyst-121\")\n                val cfgObj = root.optJSONObject(\"config\")\n                val config = if (cfgObj != null) {\n                    AndroidPortConfig(\n                        targetAbi = cfgObj.optString(\"targetAbi\", \"arm64-v8a\"),\n                        packageName = cfgObj.optString(\"packageName\", \"com.mojang.minecraftpe\"),\n                        storagePath = cfgObj.optString(\"storagePath\", \"/Android/data/com.rubenamethyst.app/files\"),\n                        runtimePath = cfgObj.optString(\"runtimePath\", \"\"),\n                        verifyAbiOnLaunch = cfgObj.optBoolean(\"verifyAbiOnLaunch\", true)\n                    )\n                } else {\n                    AndroidPortConfig()\n                }\n\n                val modsArr = root.optJSONArray(\"mods\")\n                val mods = mutableListOf<ModEntry>()\n                if (modsArr != null) {\n                    for (i in 0 until modsArr.length()) {\n                        val obj = modsArr.getJSONObject(i)\n                        mods.add(\n                            ModEntry(\n                                id = obj.getString(\"id\"),\n                                name = obj.getString(\"name\"),\n                                version = obj.optString(\"version\", \"1.0.0\"),\n                                author = obj.optString(\"author\", \"Desconocido\"),\n                                abi = obj.optString(\"abi\", \"arm64-v8a\"),\n                                libraryFile = obj.optString(\"libraryFile\", \"libmod.so\"),\n                                targetMcVersion = obj.optString(\"targetMcVersion\", \"1.21.0.3\"),\n                                localPath = obj.optString(\"localPath\", \"\"),\n                                sourceFormat = obj.optString(\"sourceFormat\", \".so\")\n                            )\n                        )\n                    }\n                }\n\n                val profArr = root.optJSONArray(\"profiles\")\n                val profiles = mutableListOf<ProfileEntry>()\n                if (profArr != null) {\n                    for (i in 0 until profArr.length()) {\n                        val obj = profArr.getJSONObject(i)\n                        val modIdsJson = obj.optJSONArray(\"modIds\")\n                        val modIds = mutableListOf<String>()\n                        if (modIdsJson != null) {\n                            for (j in 0 until modIdsJson.length()) {\n                                modIds.add(modIdsJson.getString(j))\n                            }\n                        }\n                        profiles.add(\n                            ProfileEntry(\n                                id = obj.getString(\"id\"),\n                                name = obj.getString(\"name\"),\n                                mcVersion = obj.optString(\"mcVersion\", \"1.21.0.3\"),\n                                runtimeId = obj.optString(\"runtimeId\", \"amethyst-1.3.1\"),\n                                modIds = modIds\n                            )\n                        )\n                    }\n                }\n\n                if (profiles.isNotEmpty()) {\n                    return LauncherUiState(\n                        activeProfileId = activeProfileId,\n                        profiles = profiles,\n                        mods = mods,\n                        config = config\n                    )\n                }\n            } catch (_: Exception) {\n                // Fallback a estado inicial si el JSON está corrupto\n            }\n        }\n\n        val defaultProfiles = listOf(\n            ProfileEntry(\n                id = \"profile-amethyst-121\",\n                name = \"Amethyst 1.21\",\n                mcVersion = \"1.21.0.3\",\n                runtimeId = \"amethyst-1.3.1\",\n                modIds = emptyList()\n            ),\n            ProfileEntry(\n                id = \"profile-vanilla-121\",\n                name = \"Vanilla 1.21\",\n                mcVersion = \"1.21.2.2\",\n                runtimeId = \"vanilla\",\n                modIds = emptyList()\n            )\n        )\n        return LauncherUiState(\n            activeProfileId = \"profile-amethyst-121\",\n            profiles = defaultProfiles,\n            mods = emptyList(),\n            config = AndroidPortConfig()\n        )\n    }\n\n    fun persistState(state: LauncherUiState) {\n        baseDir.mkdirs()\n        val modsArr = JSONArray()\n        state.mods.forEach { mod ->\n            modsArr.put(\n                JSONObject().apply {\n                    put(\"id\", mod.id)\n                    put(\"name\", mod.name)\n                    put(\"version\", mod.version)\n                    put(\"author\", mod.author)\n                    put(\"abi\", mod.abi)\n                    put(\"libraryFile\", mod.libraryFile)\n                    put(\"targetMcVersion\", mod.targetMcVersion)\n                    put(\"localPath\", mod.localPath)\n                    put(\"sourceFormat\", mod.sourceFormat)\n                }\n            )\n        }\n        val profilesArr = JSONArray()\n        state.profiles.forEach { p ->\n            profilesArr.put(\n                JSONObject().apply {\n                    put(\"id\", p.id)\n                    put(\"name\", p.name)\n                    put(\"mcVersion\", p.mcVersion)\n                    put(\"runtimeId\", p.runtimeId)\n                    put(\"modIds\", JSONArray(p.modIds))\n                }\n            )\n        }\n        val configObj = JSONObject().apply {\n            put(\"targetAbi\", state.config.targetAbi)\n            put(\"packageName\", state.config.packageName)\n            put(\"storagePath\", state.config.storagePath)\n            put(\"runtimePath\", state.config.runtimePath)\n            put(\"verifyAbiOnLaunch\", state.config.verifyAbiOnLaunch)\n        }\n        val root = JSONObject().apply {\n            put(\"activeProfileId\", state.activeProfileId)\n            put(\"mods\", modsArr)\n            put(\"profiles\", profilesArr)\n            put(\"config\", configObj)\n        }\n        stateFile.writeText(root.toString(2))\n    }\n\n    fun writeRuntimeManifest(targetFile: File, profile: ProfileEntry, mods: List<ModEntry>) {\n        val modsArray = JSONArray()\n        mods.forEach { mod ->\n            modsArray.put(\n                JSONObject().apply {\n                    put(\"id\", mod.id)\n                    put(\"libraryFile\", mod.libraryFile)\n                    put(\"localPath\", mod.localPath)\n                    put(\"abi\", mod.abi)\n                }\n            )\n        }\n        val payload = JSONObject().apply {\n            put(\"profileId\", profile.id)\n            put(\"mcVersion\", profile.mcVersion)\n            put(\"runtimeId\", profile.runtimeId)\n            put(\"mods\", modsArray)\n        }\n        targetFile.writeText(payload.toString(2))\n    }\n\n    private fun resolveFileName(resolver: ContentResolver, uri: Uri): String {\n        resolver.query(uri, null, null, null, null)?.use { cursor ->\n            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)\n            if (idx >= 0 && cursor.moveToFirst()) {\n                val name = cursor.getString(idx)\n                if (!name.isNullOrBlank()) return name\n            }\n        }\n        return uri.lastPathSegment?.substringAfterLast('/') ?: \"imported_mod.amethyst\"\n    }\n\n    fun importRuntimeSo(resolver: ContentResolver, uri: Uri): Result<File> {\n        return try {\n            val fileName = resolveFileName(resolver, uri)\n            val runtimesDir = File(baseDir, \"runtimes\").apply { mkdirs() }\n            val dest = File(runtimesDir, if (fileName.endsWith(\".so\")) fileName else \"libamethyst_runtime.so\")\n            resolver.openInputStream(uri)?.use { input ->\n                dest.outputStream().use { output -> input.copyTo(output) }\n            } ?: return Result.failure(IllegalStateException(\"No se pudo abrir el archivo de runtime.\"))\n            dest.setReadable(true, false)\n            dest.setExecutable(true, false)\n            Result.success(dest)\n        } catch (e: Exception) {\n            Result.failure(e)\n        }\n    }\n\n    fun extractAndValidateMod(resolver: ContentResolver, uri: Uri, abi: String): Result<ModEntry> {\n        return try {\n            val displayName = resolveFileName(resolver, uri)\n            val lower = displayName.lowercase()\n            if (\n                !lower.endsWith(\".amethyst\") &&\n                !lower.endsWith(\".so\") &&\n                !lower.endsWith(\".zip\") &&\n                !lower.endsWith(\".json\")\n            ) {\n                return Result.failure(\n                    IllegalArgumentException(\"Formato no soportado ($displayName). Usa .amethyst, .so, .zip o mod.json.\")\n                )\n            }\n\n            val modsRoot = File(baseDir, \"mods\").apply { mkdirs() }\n            val rawBytes = resolver.openInputStream(uri)?.use { it.readBytes() }\n                ?: return Result.failure(IllegalStateException(\"No se pudo leer el archivo $displayName.\"))\n\n            if (rawBytes.isEmpty()) {\n                return Result.failure(IllegalArgumentException(\"El archivo $displayName está vacío.\"))\n            }\n\n            val isZip = rawBytes.size >= 2 && rawBytes[0] == 0x50.toByte() && rawBytes[1] == 0x4B.toByte()\n            val isElf = rawBytes.size >= 4 &&\n                rawBytes[0] == 0x7F.toByte() &&\n                rawBytes[1] == 'E'.code.toByte() &&\n                rawBytes[2] == 'L'.code.toByte() &&\n                rawBytes[3] == 'F'.code.toByte()\n\n            val baseId = displayName\n                .substringBeforeLast(\".\")\n                .removePrefix(\"lib\")\n                .lowercase()\n                .replace(Regex(\"[^a-z0-9]+\"), \"-\")\n                .trim('-')\n                .ifBlank { \"mod-${System.currentTimeMillis()}\" }\n\n            val modDir = File(modsRoot, baseId).apply { mkdirs() }\n\n            if (isZip) {\n                var parsedMeta: JSONObject? = null\n                var preferredSo: File? = null\n                var fallbackSo: File? = null\n\n                ZipInputStream(rawBytes.inputStream()).use { zis ->\n                    var entry = zis.nextEntry\n                    while (entry != null) {\n                        val entryName = entry.name\n                        if (!entry.isDirectory && !entryName.contains(\"..\")) {\n                            val safeRel = entryName.trimStart('/')\n                            val fileName = safeRel.substringAfterLast('/')\n                            val outFile = File(modDir, safeRel)\n                            outFile.parentFile?.mkdirs()\n                            outFile.outputStream().use { zis.copyTo(it) }\n\n                            if (fileName.equals(\"mod.json\", ignoreCase = true) ||\n                                fileName.equals(\"manifest.json\", ignoreCase = true)\n                            ) {\n                                parsedMeta = runCatching { JSONObject(outFile.readText()) }.getOrNull()\n                            } else if (fileName.endsWith(\".so\", ignoreCase = true)) {\n                                outFile.setReadable(true, false)\n                                outFile.setExecutable(true, false)\n                                if (entryName.contains(abi, ignoreCase = true)) {\n                                    preferredSo = outFile\n                                } else if (fallbackSo == null) {\n                                    fallbackSo = outFile\n                                }\n                            }\n                        }\n                        zis.closeEntry()\n                        entry = zis.nextEntry\n                    }\n                }\n\n                val targetSo = preferredSo ?: fallbackSo\n                    ?: return Result.failure(\n                        IllegalStateException(\"El paquete $displayName no contiene ninguna librería nativa (.so) para Android.\")\n                    )\n\n                val meta = parsedMeta\n                val modName = meta?.optString(\"name\")?.takeIf { it.isNotBlank() }\n                    ?: displayName.substringBeforeLast(\".\").replace('_', ' ')\n                val modVersion = meta?.optString(\"version\")?.takeIf { it.isNotBlank() } ?: \"1.0.0\"\n                val modAuthor = meta?.optString(\"author\")?.takeIf { it.isNotBlank() } ?: \"AmethystMod\"\n                val modTargetMc = meta?.optString(\"targetMcVersion\")?.takeIf { it.isNotBlank() } ?: \"1.21.0.3\"\n                val modId = (meta?.optString(\"id\")?.takeIf { it.isNotBlank() } ?: baseId)\n                    .lowercase().replace(Regex(\"[^a-z0-9-]+\"), \"-\")\n\n                return Result.success(\n                    ModEntry(\n                        id = modId,\n                        name = modName,\n                        version = modVersion,\n                        author = modAuthor,\n                        abi = abi,\n                        libraryFile = targetSo.name,\n                        targetMcVersion = modTargetMc,\n                        localPath = targetSo.absolutePath,\n                        sourceFormat = if (lower.endsWith(\".amethyst\")) \".amethyst\" else \".zip\"\n                    )\n                )\n            }\n\n            if (isElf || lower.endsWith(\".so\")) {\n                val soFileName = if (displayName.endsWith(\".so\")) displayName else \"lib${baseId.replace('-', '_')}.so\"\n                val outSo = File(modDir, soFileName)\n                outSo.writeBytes(rawBytes)\n                outSo.setReadable(true, false)\n                outSo.setExecutable(true, false)\n\n                return Result.success(\n                    ModEntry(\n                        id = baseId,\n                        name = displayName.substringBeforeLast(\".\").removePrefix(\"lib\").replace('_', ' '),\n                        version = \"1.0.0\",\n                        author = \"LocalELF\",\n                        abi = abi,\n                        libraryFile = outSo.name,\n                        targetMcVersion = \"1.21.0.3\",\n                        localPath = outSo.absolutePath,\n                        sourceFormat = if (lower.endsWith(\".amethyst\")) \".amethyst\" else \".so\"\n                    )\n                )\n            }\n\n            // Manifiesto JSON suelto (.json o .amethyst JSON)\n            val meta = JSONObject(rawBytes.toString(Charsets.UTF_8))\n            val libName = meta.optString(\"libraryFile\", \"lib${baseId.replace('-', '_')}.so\")\n            val placeholderSo = File(modDir, libName)\n            return Result.success(\n                ModEntry(\n                    id = meta.optString(\"id\", baseId),\n                    name = meta.optString(\"name\", baseId),\n                    version = meta.optString(\"version\", \"1.0.0\"),\n                    author = meta.optString(\"author\", \"AmethystMod\"),\n                    abi = meta.optString(\"abi\", abi),\n                    libraryFile = libName,\n                    targetMcVersion = meta.optString(\"targetMcVersion\", \"1.21.0.3\"),\n                    localPath = if (placeholderSo.exists()) placeholderSo.absolutePath else \"\",\n                    sourceFormat = if (lower.endsWith(\".amethyst\")) \".amethyst\" else \".json\"\n                )\n            )\n        } catch (e: Exception) {\n            Result.failure(e)\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/cpp/CMakeLists.txt',
-    language: 'cmake',
-    summary: 'Script de compilación NDK C++20 para libamethyst_loader.so en arm64-v8a y armeabi-v7a.',
-    content: `cmake_minimum_required(VERSION 3.22.1)
-project("amethyst_loader" LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-add_library(amethyst_loader SHARED
-    amethyst_loader.cpp
-)
-
-find_library(log-lib log)
-find_library(android-lib android)
-
-target_link_libraries(amethyst_loader
-    \${log-lib}
-    \${android-lib}
-    dl
-)
-`,
+    "path": "app/src/main/java/com/rubenamethyst/app/ui/Screens.kt",
+    "language": "kotlin",
+    "summary": "Pantallas Compose con feedback de importación .amethyst y selector de libamethyst_runtime.so.",
+    "content": "package com.rubenamethyst.app.ui\n\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.foundation.lazy.items\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.*\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.unit.dp\nimport com.rubenamethyst.app.AndroidPortConfig\nimport com.rubenamethyst.app.LauncherUiState\nimport com.rubenamethyst.app.ProfileEntry\n\nprivate val AmethystColors = darkColorScheme(\n    primary = Color(0xFF8B5CF6),\n    background = Color(0xFF0B0A10),\n    surface = Color(0xFF13111C),\n    onPrimary = Color.White,\n    onBackground = Color(0xFFEDE9F6),\n    onSurface = Color(0xFFEDE9F6)\n)\n\n@Composable\nfun AmethystTheme(content: @Composable () -> Unit) {\n    MaterialTheme(colorScheme = AmethystColors, content = content)\n}\n\n@Composable\nfun LauncherScreen(\n    state: LauncherUiState,\n    onSelectProfile: (String) -> Unit,\n    onLaunchGame: () -> Unit,\n    onDismissStatus: () -> Unit\n) {\n    val active = state.activeProfile\n    val isVanilla = active?.runtimeId == \"vanilla\"\n    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {\n        Text(\"Amethyst Launcher\", style = MaterialTheme.typography.headlineMedium)\n\n        state.statusMessage?.let { msg ->\n            Card(modifier = Modifier.fillMaxWidth()) {\n                Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                    Text(msg, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)\n                    TextButton(onClick = onDismissStatus) { Text(\"OK\") }\n                }\n            }\n        }\n\n        Card(modifier = Modifier.fillMaxWidth()) {\n            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                Text(active?.name ?: \"Sin perfil\", style = MaterialTheme.typography.titleLarge)\n                Text(\"MCBE ${active?.mcVersion ?: \"-\"} · ${active?.runtimeId ?: \"-\"} · ${state.activeMods.size} mods\")\n                if (!isVanilla && state.config.runtimePath.isBlank()) {\n                    Text(\n                        \"Runtime pendiente: importa libamethyst_runtime.so en Mods o Ajustes.\",\n                        style = MaterialTheme.typography.bodySmall\n                    )\n                }\n                Button(onClick = onLaunchGame, modifier = Modifier.fillMaxWidth()) {\n                    Text(if (isVanilla) \"Iniciar Minecraft (Vanilla)\" else \"Iniciar Amethyst Moddeado\")\n                }\n            }\n        }\n        Text(\"Cambiar perfil rápido\", style = MaterialTheme.typography.titleSmall)\n        state.profiles.forEach { profile ->\n            OutlinedButton(\n                onClick = { onSelectProfile(profile.id) },\n                modifier = Modifier.fillMaxWidth()\n            ) {\n                Text(\"${profile.name} (${profile.mcVersion})\")\n            }\n        }\n    }\n}\n\n@Composable\nfun ProfilesScreen(\n    state: LauncherUiState,\n    onSelectProfile: (String) -> Unit,\n    onSaveProfile: (ProfileEntry) -> Unit,\n    onDeleteProfile: (String) -> Unit\n) {\n    var newName by remember { mutableStateOf(\"\") }\n    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {\n        Text(\"Perfiles\", style = MaterialTheme.typography.headlineMedium)\n        OutlinedTextField(\n            value = newName,\n            onValueChange = { newName = it },\n            label = { Text(\"Nuevo perfil\") },\n            modifier = Modifier.fillMaxWidth()\n        )\n        Button(\n            onClick = {\n                if (newName.isNotBlank()) {\n                    onSaveProfile(ProfileEntry(\"profile-${System.currentTimeMillis()}\", newName.trim(), \"1.21.0.3\", \"amethyst-1.3.1\", emptyList()))\n                    newName = \"\"\n                }\n            },\n            modifier = Modifier.fillMaxWidth()\n        ) {\n            Text(\"Crear Perfil\")\n        }\n        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {\n            items(state.profiles) { profile ->\n                Card(modifier = Modifier.fillMaxWidth()) {\n                    Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                        Column {\n                            Text(profile.name, style = MaterialTheme.typography.titleMedium)\n                            Text(\"MCBE ${profile.mcVersion} · ${profile.runtimeId}\")\n                        }\n                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {\n                            TextButton(onClick = { onSelectProfile(profile.id) }) { Text(\"Usar\") }\n                            TextButton(onClick = { onDeleteProfile(profile.id) }) { Text(\"Eliminar\") }\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun ModsScreen(\n    state: LauncherUiState,\n    onToggleMod: (String) -> Unit,\n    onImportClick: () -> Unit,\n    onImportRuntimeClick: () -> Unit,\n    onDismissStatus: () -> Unit\n) {\n    val activeIds = state.activeProfile?.modIds ?: emptyList()\n    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {\n        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n            Text(\"Mods (.amethyst / .so)\", style = MaterialTheme.typography.titleLarge)\n            Button(onClick = onImportClick) { Text(\"Importar Mod\") }\n        }\n        OutlinedButton(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {\n            Text(\n                if (state.config.runtimePath.isBlank()) \"Importar libamethyst_runtime.so\"\n                else \"Runtime: ${state.config.runtimePath.substringAfterLast('/')}\"\n            )\n        }\n        state.statusMessage?.let { msg ->\n            Card(modifier = Modifier.fillMaxWidth()) {\n                Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                    Text(msg, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)\n                    TextButton(onClick = onDismissStatus) { Text(\"OK\") }\n                }\n            }\n        }\n        if (state.mods.isEmpty()) {\n            Text(\n                \"No hay mods importados todavía. Pulsa \\\"Importar Mod\\\" para cargar un archivo .amethyst, .so o .zip.\",\n                style = MaterialTheme.typography.bodyMedium\n            )\n        } else {\n            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                items(state.mods) { mod ->\n                    Card(modifier = Modifier.fillMaxWidth()) {\n                        Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                            Column(modifier = Modifier.weight(1f)) {\n                                Text(mod.name, style = MaterialTheme.typography.titleMedium)\n                                Text(\"${mod.sourceFormat} · ${mod.libraryFile} · ${mod.abi} · v${mod.version}\")\n                            }\n                            Switch(checked = activeIds.contains(mod.id), onCheckedChange = { onToggleMod(mod.id) })\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun SettingsScreen(\n    config: AndroidPortConfig,\n    onUpdateConfig: (AndroidPortConfig) -> Unit,\n    onImportRuntimeClick: () -> Unit\n) {\n    Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {\n        Text(\"Ajustes Android\", style = MaterialTheme.typography.headlineMedium)\n        Text(\"Application ID: com.rubenamethyst.app\")\n        Text(\"Paquete objetivo: ${config.packageName}\")\n        Text(\"Ruta scoped: ${config.storagePath}\")\n        Text(\"ABI: ${config.targetAbi}\")\n        Text(\"Runtime .so: ${config.runtimePath.ifBlank { \"No importado\" }}\")\n        Button(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {\n            Text(\"Seleccionar libamethyst_runtime.so\")\n        }\n        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n            Text(\"Verificar ABI antes de iniciar\")\n            Switch(\n                checked = config.verifyAbiOnLaunch,\n                onCheckedChange = { onUpdateConfig(config.copy(verifyAbiOnLaunch = it)) }\n            )\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/AndroidManifest.xml',
-    language: 'xml',
-    summary: 'Manifiesto Android con consultas de paquetes (com.mojang.minecraftpe) y tema Material.',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <queries>
-        <package android:name="com.mojang.minecraftpe" />
-    </queries>
-
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-
-    <application
-        android:allowBackup="true"
-        android:label="@string/app_name"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.AmethystLauncher">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-`,
+    "path": "app/src/main/cpp/amethyst_loader.cpp",
+    "language": "cpp",
+    "summary": "Cargador JNI/C++ que ejecuta dlopen() y dlsym(\"Initialize\") reportando errores reales.",
+    "content": "#include <jni.h>\n#include <dlfcn.h>\n#include <android/log.h>\n#include <sstream>\n#include <string>\n#include <vector>\n\n#define LOG_TAG \"AmethystLoader\"\n#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)\n#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)\n\nnamespace amethyst::android {\n\nusing AmethystModInitFn = void (*)(const char* mcVersion, void* libMinecraftHandle);\n\nstd::string TryLoadElf(const std::string& path, void** outHandle) {\n    if (path.empty()) {\n        return \"ruta vacía\";\n    }\n    void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);\n    if (!handle) {\n        const char* err = dlerror();\n        std::string msg = err ? err : \"error desconocido en dlopen\";\n        LOGE(\"Error cargando %s: %s\", path.c_str(), msg.c_str());\n        return msg;\n    }\n    *outHandle = handle;\n    LOGI(\"Libreria ELF cargada: %s\", path.c_str());\n    return \"\";\n}\n\n} // namespace amethyst::android\n\nextern \"C\" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {\n    LOGI(\"AmethystLoader (com.rubenamethyst.app) inicializado en Android\");\n    return JNI_VERSION_1_6;\n}\n\nextern \"C\" JNIEXPORT jstring JNICALL\nJava_com_rubenamethyst_app_AmethystNativeBridge_nativeBootstrapMods(\n    JNIEnv* env,\n    jobject /*thiz*/,\n    jstring jMcNativeDir,\n    jstring jRuntimeSoPath,\n    jobjectArray jModSoPaths,\n    jstring jMcVersion\n) {\n    const char* mcDirChars = env->GetStringUTFChars(jMcNativeDir, nullptr);\n    const char* runtimeChars = env->GetStringUTFChars(jRuntimeSoPath, nullptr);\n    const char* mcVerChars = env->GetStringUTFChars(jMcVersion, nullptr);\n\n    std::string mcNativeDir = mcDirChars ? mcDirChars : \"\";\n    std::string runtimeSoPath = runtimeChars ? runtimeChars : \"\";\n    std::string mcVersion = mcVerChars ? mcVerChars : \"1.21.0.3\";\n\n    if (mcDirChars) env->ReleaseStringUTFChars(jMcNativeDir, mcDirChars);\n    if (runtimeChars) env->ReleaseStringUTFChars(jRuntimeSoPath, runtimeChars);\n    if (mcVerChars) env->ReleaseStringUTFChars(jMcVersion, mcVerChars);\n\n    std::ostringstream report;\n\n    // 1. Intentar pre-enlazar libminecraftpe.so desde el directorio nativo detectado\n    void* mcHandle = dlopen(\"libminecraftpe.so\", RTLD_NOLOAD);\n    if (!mcHandle && !mcNativeDir.empty()) {\n        void* cppHandle = nullptr;\n        amethyst::android::TryLoadElf(mcNativeDir + \"/libc++_shared.so\", &cppHandle);\n        void* fmodHandle = nullptr;\n        amethyst::android::TryLoadElf(mcNativeDir + \"/libfmod.so\", &fmodHandle);\n\n        std::string mcErr = amethyst::android::TryLoadElf(mcNativeDir + \"/libminecraftpe.so\", &mcHandle);\n        if (mcHandle) {\n            report << \"[MC_OK] libminecraftpe.so cargada desde \" << mcNativeDir << \"\\n\";\n        } else {\n            report << \"[MC_WARN] No se pudo enlazar libminecraftpe.so directamente: \" << mcErr << \"\\n\";\n        }\n    } else if (mcHandle) {\n        report << \"[MC_OK] libminecraftpe.so ya presente en memoria\\n\";\n    } else {\n        report << \"[MC_WARN] Directorio nativo de Minecraft no disponible en este dispositivo\\n\";\n    }\n\n    // 2. Cargar AmethystRuntime (.so)\n    if (runtimeSoPath.empty()) {\n        report << \"[RUNTIME_MISSING] No has importado libamethyst_runtime.so para Android.\\n\";\n    } else {\n        void* runtimeHandle = nullptr;\n        std::string rtErr = amethyst::android::TryLoadElf(runtimeSoPath, &runtimeHandle);\n        if (runtimeHandle) {\n            report << \"[RUNTIME_OK] \" << runtimeSoPath << \"\\n\";\n        } else {\n            report << \"[RUNTIME_ERROR] \" << runtimeSoPath << \" -> \" << rtErr << \"\\n\";\n        }\n    }\n\n    // 3. Cargar cada mod .so extraído de .amethyst / .so\n    jsize modCount = jModSoPaths ? env->GetArrayLength(jModSoPaths) : 0;\n    if (modCount == 0) {\n        report << \"[MODS_EMPTY] No hay mods .amethyst / .so activados en este perfil.\\n\";\n    } else {\n        for (jsize i = 0; i < modCount; ++i) {\n            auto jPath = static_cast<jstring>(env->GetObjectArrayElement(jModSoPaths, i));\n            const char* pathChars = env->GetStringUTFChars(jPath, nullptr);\n            std::string modPath = pathChars ? pathChars : \"\";\n            if (pathChars) env->ReleaseStringUTFChars(jPath, pathChars);\n            env->DeleteLocalRef(jPath);\n\n            void* modHandle = nullptr;\n            std::string modErr = amethyst::android::TryLoadElf(modPath, &modHandle);\n            if (!modHandle) {\n                report << \"[MOD_ERROR] \" << modPath << \" -> \" << modErr << \"\\n\";\n                continue;\n            }\n\n            auto initFn = reinterpret_cast<amethyst::android::AmethystModInitFn>(\n                dlsym(modHandle, \"Initialize\")\n            );\n            if (initFn && mcHandle) {\n                initFn(mcVersion.c_str(), mcHandle);\n                report << \"[MOD_OK] Initialize() ejecutado en \" << modPath << \"\\n\";\n            } else if (initFn) {\n                report << \"[MOD_LOADED] \" << modPath << \" cargado (Initialize pendiente de libminecraftpe.so)\\n\";\n            } else {\n                report << \"[MOD_LOADED] \" << modPath << \" cargado sin simbolo Initialize()\\n\";\n            }\n        }\n    }\n\n    return env->NewStringUTF(report.str().c_str());\n}\n"
   },
   {
-    path: 'app/src/main/res/values/strings.xml',
-    language: 'xml',
-    summary: 'Recursos de texto de la aplicación Android.',
-    content: `<resources>
-    <string name="app_name">Amethyst Launcher</string>
-</resources>
-`,
+    "path": "app/src/main/cpp/CMakeLists.txt",
+    "language": "cmake",
+    "summary": "Script de compilación NDK C++20 para libamethyst_loader.so.",
+    "content": "cmake_minimum_required(VERSION 3.22.1)\nproject(\"amethyst_loader\" LANGUAGES CXX)\n\nset(CMAKE_CXX_STANDARD 20)\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\n\nadd_library(amethyst_loader SHARED\n    amethyst_loader.cpp\n)\n\nfind_library(log-lib log)\nfind_library(android-lib android)\n\ntarget_link_libraries(amethyst_loader\n    ${log-lib}\n    ${android-lib}\n    dl\n)\n"
   },
   {
-    path: 'app/src/main/res/values/themes.xml',
-    language: 'xml',
-    summary: 'Tema base Material para MainActivity.',
-    content: `<resources>
-    <style name="Theme.AmethystLauncher" parent="android:Theme.Material.NoActionBar" />
-</resources>
-`,
+    "path": "app/src/main/AndroidManifest.xml",
+    "language": "xml",
+    "summary": "Manifiesto Android con MainActivity, AmethystGameActivity y consultas a com.mojang.minecraftpe.",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n\n    <queries>\n        <package android:name=\"com.mojang.minecraftpe\" />\n    </queries>\n\n    <uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.REQUEST_INSTALL_PACKAGES\" />\n\n    <application\n        android:allowBackup=\"true\"\n        android:label=\"@string/app_name\"\n        android:supportsRtl=\"true\"\n        android:theme=\"@style/Theme.AmethystLauncher\">\n        <activity\n            android:name=\".MainActivity\"\n            android:exported=\"true\"\n            android:windowSoftInputMode=\"adjustResize\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n        <activity\n            android:name=\".AmethystGameActivity\"\n            android:exported=\"false\" />\n    </application>\n</manifest>\n"
   },
   {
-    path: 'app/build.gradle.kts',
-    language: 'gradle',
-    summary: 'Módulo Gradle Android con applicationId com.rubenamethyst.app, Compose BOM y NDK CMake.',
-    content: `plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
-}
-
-android {
-    namespace = "com.rubenamethyst.app"
-    compileSdk = 35
-    ndkVersion = "26.3.11579264"
-
-    defaultConfig {
-        applicationId = "com.rubenamethyst.app"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.3.1-android"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-
-    buildFeatures {
-        compose = true
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
-    implementation(composeBom)
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
-}
-`,
+    "path": "app/src/main/res/values/strings.xml",
+    "language": "xml",
+    "summary": "Recursos de texto de la aplicación Android.",
+    "content": "<resources>\n    <string name=\"app_name\">Amethyst Launcher</string>\n</resources>\n"
   },
   {
-    path: 'build.gradle.kts',
-    language: 'gradle',
-    summary: 'Configuración Gradle raíz del proyecto Android.',
-    content: `plugins {
-    id("com.android.application") version "8.7.2" apply false
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
-}
-`,
+    "path": "app/src/main/res/values/themes.xml",
+    "language": "xml",
+    "summary": "Tema base Material para MainActivity.",
+    "content": "<resources>\n    <style name=\"Theme.AmethystLauncher\" parent=\"android:Theme.Material.NoActionBar\" />\n</resources>\n"
   },
   {
-    path: 'settings.gradle.kts',
-    language: 'gradle',
-    summary: 'Repositorios de Google/MavenCentral y declaración del módulo :app.',
-    content: `pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-rootProject.name = "AmethystLauncherAndroid"
-include(":app")
-`,
+    "path": "app/build.gradle.kts",
+    "language": "gradle",
+    "summary": "Módulo Gradle Android con applicationId com.rubenamethyst.app, Compose BOM y NDK 26.3.",
+    "content": "plugins {\n    id(\"com.android.application\")\n    id(\"org.jetbrains.kotlin.android\")\n    id(\"org.jetbrains.kotlin.plugin.compose\")\n}\n\nandroid {\n    namespace = \"com.rubenamethyst.app\"\n    compileSdk = 35\n    ndkVersion = \"26.3.11579264\"\n\n    defaultConfig {\n        applicationId = \"com.rubenamethyst.app\"\n        minSdk = 26\n        targetSdk = 35\n        versionCode = 1\n        versionName = \"1.3.1-android\"\n\n        ndk {\n            abiFilters += listOf(\"arm64-v8a\", \"armeabi-v7a\")\n        }\n    }\n\n    buildTypes {\n        release {\n            isMinifyEnabled = false\n        }\n    }\n\n    externalNativeBuild {\n        cmake {\n            path = file(\"src/main/cpp/CMakeLists.txt\")\n            version = \"3.22.1\"\n        }\n    }\n\n    buildFeatures {\n        compose = true\n    }\n\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n\n    kotlinOptions {\n        jvmTarget = \"17\"\n    }\n}\n\ndependencies {\n    val composeBom = platform(\"androidx.compose:compose-bom:2024.10.01\")\n    implementation(composeBom)\n    implementation(\"androidx.core:core-ktx:1.15.0\")\n    implementation(\"androidx.activity:activity-compose:1.9.3\")\n    implementation(\"androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7\")\n    implementation(\"androidx.compose.ui:ui\")\n    implementation(\"androidx.compose.material3:material3\")\n    implementation(\"androidx.compose.material:material-icons-extended\")\n}\n"
   },
   {
-    path: 'gradle.properties',
-    language: 'properties',
-    summary: 'Opciones de memoria JVM, AndroidX y caché de compilación Gradle.',
-    content: `org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-kotlin.code.style=official
-android.nonTransitiveRClass=true
-`,
+    "path": "build.gradle.kts",
+    "language": "gradle",
+    "summary": "Configuración Gradle raíz del proyecto Android.",
+    "content": "plugins {\n    id(\"com.android.application\") version \"8.7.2\" apply false\n    id(\"org.jetbrains.kotlin.android\") version \"2.0.21\" apply false\n    id(\"org.jetbrains.kotlin.plugin.compose\") version \"2.0.21\" apply false\n}\n"
   },
   {
-    path: '.github/workflows/build-apk.yml',
-    language: 'yaml',
-    summary: 'Flujo de GitHub Actions para compilar automáticamente app-debug.apk con Android SDK 35, NDK y Gradle 8.9.',
-    content: `name: Compilar Amethyst Launcher APK
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-jobs:
-  build-apk:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v7
-
-      - name: Configurar JDK 17
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Configurar Android SDK 35, NDK y CMake
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;26.3.11579264 cmake;3.22.1'
-          accept-android-sdk-licenses: 'true'
-
-      - name: Configurar Gradle 8.9
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: '8.9'
-
-      - name: Compilar APK Debug (com.rubenamethyst.app)
-        working-directory: android
-        run: gradle assembleDebug --no-daemon
-
-      - name: Subir APK compilado
-        uses: actions/upload-artifact@v7
-        with:
-          name: amethyst-launcher-com.rubenamethyst.app-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-`,
+    "path": "settings.gradle.kts",
+    "language": "gradle",
+    "summary": "Repositorios de Google/MavenCentral y declaración del módulo :app.",
+    "content": "pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\nrootProject.name = \"AmethystLauncherAndroid\"\ninclude(\":app\")\n"
   },
+  {
+    "path": "gradle.properties",
+    "language": "properties",
+    "summary": "Opciones de memoria JVM, AndroidX y caché de compilación Gradle.",
+    "content": "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\nkotlin.code.style=official\nandroid.nonTransitiveRClass=true\n"
+  },
+  {
+    "path": ".github/workflows/build-apk.yml",
+    "language": "yaml",
+    "summary": "Flujo de GitHub Actions con setup-android@v4, SDK 35, NDK y Gradle 8.9.",
+    "content": "name: Compilar Amethyst Launcher APK\n\non:\n  push:\n    branches: [ main, master ]\n  workflow_dispatch:\n\njobs:\n  build-apk:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Descargar repositorio\n        uses: actions/checkout@v7\n\n      - name: Configurar JDK 17\n        uses: actions/setup-java@v6\n        with:\n          distribution: temurin\n          java-version: '17'\n\n      - name: Configurar Android SDK 35, NDK y CMake\n        uses: android-actions/setup-android@v4\n        with:\n          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;26.3.11579264 cmake;3.22.1'\n          accept-android-sdk-licenses: 'true'\n\n      - name: Configurar Gradle 8.9\n        uses: gradle/actions/setup-gradle@v6\n        with:\n          gradle-version: '8.9'\n\n      - name: Compilar APK Debug (com.rubenamethyst.app)\n        working-directory: android\n        run: gradle assembleDebug --no-daemon\n\n      - name: Subir APK compilado\n        uses: actions/upload-artifact@v7\n        with:\n          name: amethyst-launcher-com.rubenamethyst.app-debug\n          path: android/app/build/outputs/apk/debug/app-debug.apk\n"
+  }
 ];

@@ -72,10 +72,18 @@ export const ModsView: React.FC<ModsViewProps> = ({
       return;
     }
 
-    if (file.name.endsWith('.so') || file.name.endsWith('.zip')) {
-      const baseName = file.name.replace(/\.(so|zip)$/i, '').replace(/^lib/, '');
+    if (
+      file.name.endsWith('.so') ||
+      file.name.endsWith('.zip') ||
+      file.name.endsWith('.amethyst')
+    ) {
+      const baseName = file.name
+        .replace(/\.(so|zip|amethyst)$/i, '')
+        .replace(/^lib/, '');
       setModName(baseName.replace(/[_-]+/g, ' '));
-      setModLibraryFile(file.name.endsWith('.so') ? file.name : `lib${baseName}.so`);
+      setModLibraryFile(
+        file.name.endsWith('.so') ? file.name : `lib${baseName.replace(/[^a-z0-9_]+/gi, '_')}.so`
+      );
       setModAuthor('LocalImport');
       setImportErrors([]);
     }
@@ -325,7 +333,7 @@ export const ModsView: React.FC<ModsViewProps> = ({
           <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-[#13111C] border border-white/10 p-6 shadow-2xl">
             <div className="flex items-center justify-between gap-4">
               <h2 id="import-mod-title" className="text-lg font-semibold text-white">
-                Importar mod Android (.so / mod.json)
+                Importar mod Android (.amethyst / .so / .zip)
               </h2>
               <button
                 type="button"
@@ -352,11 +360,11 @@ export const ModsView: React.FC<ModsViewProps> = ({
               <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-[#0B0A10] p-4 cursor-pointer hover:border-[#8B5CF6] transition-colors">
                 <Upload className="w-5 h-5 text-[#A78BFA]" />
                 <span className="text-xs font-medium text-[#C4BBE0]">
-                  Seleccionar archivo .so, .zip o mod.json desde el dispositivo
+                  Seleccionar archivo .amethyst, .so, .zip o mod.json desde el dispositivo
                 </span>
                 <input
                   type="file"
-                  accept=".so,.zip,.json"
+                  accept=".amethyst,.so,.zip,.json"
                   onChange={handleFileUpload}
                   className="sr-only"
                 />

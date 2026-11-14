@@ -7,7 +7,9 @@ data class ModEntry(
     val author: String,
     val abi: String,
     val libraryFile: String,
-    val targetMcVersion: String
+    val targetMcVersion: String,
+    val localPath: String = "",
+    val sourceFormat: String = ".so"
 )
 
 data class ProfileEntry(
@@ -22,6 +24,7 @@ data class AndroidPortConfig(
     val targetAbi: String = "arm64-v8a",
     val packageName: String = "com.mojang.minecraftpe",
     val storagePath: String = "/Android/data/com.rubenamethyst.app/files",
+    val runtimePath: String = "",
     val verifyAbiOnLaunch: Boolean = true
 )
 
@@ -29,7 +32,9 @@ data class LauncherUiState(
     val activeProfileId: String,
     val profiles: List<ProfileEntry>,
     val mods: List<ModEntry>,
-    val config: AndroidPortConfig
+    val config: AndroidPortConfig,
+    val statusMessage: String? = null,
+    val lastLaunchReport: String? = null
 ) {
     val activeProfile: ProfileEntry?
         get() = profiles.firstOrNull { it.id == activeProfileId }

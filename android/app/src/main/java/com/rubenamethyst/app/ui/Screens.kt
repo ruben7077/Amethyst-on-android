@@ -30,17 +30,35 @@ fun AmethystTheme(content: @Composable () -> Unit) {
 fun LauncherScreen(
     state: LauncherUiState,
     onSelectProfile: (String) -> Unit,
-    onLaunchGame: () -> Unit
+    onLaunchGame: () -> Unit,
+    onDismissStatus: () -> Unit
 ) {
     val active = state.activeProfile
+    val isVanilla = active?.runtimeId == "vanilla"
     Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Amethyst Launcher", style = MaterialTheme.typography.headlineMedium)
+
+        state.statusMessage?.let { msg ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(msg, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onDismissStatus) { Text("OK") }
+                }
+            }
+        }
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(active?.name ?: "Sin perfil", style = MaterialTheme.typography.titleLarge)
                 Text("MCBE ${active?.mcVersion ?: "-"} · ${active?.runtimeId ?: "-"} · ${state.activeMods.size} mods")
+                if (!isVanilla && state.config.runtimePath.isBlank()) {
+                    Text(
+                        "Runtime pendiente: importa libamethyst_runtime.so en Mods o Ajustes.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 Button(onClick = onLaunchGame, modifier = Modifier.fillMaxWidth()) {
-                    Text("Iniciar Minecraft")
+                    Text(if (isVanilla) "Iniciar Minecraft (Vanilla)" else "Iniciar Amethyst Moddeado")
                 }
             }
         }
@@ -106,23 +124,46 @@ fun ProfilesScreen(
 fun ModsScreen(
     state: LauncherUiState,
     onToggleMod: (String) -> Unit,
-    onImportClick: () -> Unit
+    onImportClick: () -> Unit,
+    onImportRuntimeClick: () -> Unit,
+    onDismissStatus: () -> Unit
 ) {
     val activeIds = state.activeProfile?.modIds ?: emptyList()
     Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Mods (.so)", style = MaterialTheme.typography.headlineMedium)
-            Button(onClick = onImportClick) { Text("Importar") }
+            Text("Mods (.amethyst / .so)", style = MaterialTheme.typography.titleLarge)
+            Button(onClick = onImportClick) { Text("Importar Mod") }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.mods) { mod ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(mod.name, style = MaterialTheme.typography.titleMedium)
-                            Text("${mod.libraryFile} · ${mod.abi} · v${mod.version}")
+        OutlinedButton(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                if (state.config.runtimePath.isBlank()) "Importar libamethyst_runtime.so"
+                else "Runtime: ${state.config.runtimePath.substringAfterLast('/')}"
+            )
+        }
+        state.statusMessage?.let { msg ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(msg, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onDismissStatus) { Text("OK") }
+                }
+            }
+        }
+        if (state.mods.isEmpty()) {
+            Text(
+                "No hay mods importados todavía. Pulsa \"Importar Mod\" para cargar un archivo .amethyst, .so o .zip.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.mods) { mod ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(mod.name, style = MaterialTheme.typography.titleMedium)
+                                Text("${mod.sourceFormat} · ${mod.libraryFile} · ${mod.abi} · v${mod.version}")
+                            }
+                            Switch(checked = activeIds.contains(mod.id), onCheckedChange = { onToggleMod(mod.id) })
                         }
-                        Switch(checked = activeIds.contains(mod.id), onCheckedChange = { onToggleMod(mod.id) })
                     }
                 }
             }
@@ -133,7 +174,8 @@ fun ModsScreen(
 @Composable
 fun SettingsScreen(
     config: AndroidPortConfig,
-    onUpdateConfig: (AndroidPortConfig) -> Unit
+    onUpdateConfig: (AndroidPortConfig) -> Unit,
+    onImportRuntimeClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Ajustes Android", style = MaterialTheme.typography.headlineMedium)
@@ -141,6 +183,10 @@ fun SettingsScreen(
         Text("Paquete objetivo: ${config.packageName}")
         Text("Ruta scoped: ${config.storagePath}")
         Text("ABI: ${config.targetAbi}")
+        Text("Runtime .so: ${config.runtimePath.ifBlank { "No importado" }}")
+        Button(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Seleccionar libamethyst_runtime.so")
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Verificar ABI antes de iniciar")
             Switch(

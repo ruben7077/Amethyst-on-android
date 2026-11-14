@@ -9,10 +9,12 @@ import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
@@ -20,25 +22,18 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
     private val _uiState = MutableStateFlow(repository.loadInitialState())
     val uiState: StateFlow<LauncherUiState> = _uiState.asStateFlow()
 
-    companion object {
-        init {
-            System.loadLibrary("amethyst_loader")
-        }
+    init {
+        AmethystNativeBridge.ensureLoaded()
     }
 
     fun detectDeviceAbi(): String = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
 
-    fun isMinecraftInstalled(context: Context, packageName: String): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(packageName, PackageManager.GET_META_DATA)
-            true
-        } catch (_: PackageManager.NameNotFoundException) {
-            false
-        }
+    fun clearStatusMessage() {
+        _uiState.value = _uiState.value.copy(statusMessage = null)
     }
 
     fun selectProfile(profileId: String) {
-        _uiState.value = _uiState.value.copy(activeProfileId = profileId)
+        _uiState.value = _uiState.value.copy(activeProfileId = profileId, statusMessage = null)
         repository.persistState(_uiState.value)
     }
 
@@ -49,7 +44,11 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             listOf(profile) + current
         }
-        _uiState.value = _uiState.value.copy(profiles = updated, activeProfileId = profile.id)
+        _uiState.value = _uiState.value.copy(
+            profiles = updated,
+            activeProfileId = profile.id,
+            statusMessage = "Perfil guardado: ${profile.name}"
+        )
         repository.persistState(_uiState.value)
     }
 
@@ -79,37 +78,99 @@ class AmethystLauncherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun launchMinecraft(context: Context) {
-        viewModelScope.launch {
-            val state = _uiState.value
-            val profile = state.activeProfile ?: return@launch
-            val configDir = File(context.getExternalFilesDir(null), "runtime_bridge")
-            configDir.mkdirs()
+        val state = _uiState.value
+        val profile = state.activeProfile ?: return
 
-            repository.writeRuntimeManifest(
-                targetFile = File(configDir, "active_profile.json"),
-                profile = profile,
-                mods = state.activeMods
-            )
-
-            val launchIntent = context.packageManager.getLaunchIntentForPackage(state.config.packageName)
-                ?: Intent().apply {
-                    setClassName(state.config.packageName, "com.mojang.minecraftpe.MainActivity")
-                }
-
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            launchIntent.putExtra("amethyst_profile_id", profile.id)
-            launchIntent.putExtra("amethyst_manifest_path", File(configDir, "active_profile.json").absolutePath)
-            context.startActivity(launchIntent)
+        // Si el perfil es Vanilla, abre Minecraft Bedrock directamente
+        if (profile.runtimeId == "vanilla") {
+            val vanillaIntent = context.packageManager.getLaunchIntentForPackage(state.config.packageName)
+            if (vanillaIntent != null) {
+                vanillaIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(vanillaIntent)
+            } else {
+                _uiState.value = state.copy(
+                    statusMessage = "No se encontró instalado ${state.config.packageName} en el dispositivo."
+                )
+            }
+            return
         }
+
+        // Perfil Amethyst moddeado: preparar manifiesto y abrir AmethystGameActivity (nunca abrir Vanilla en silencio)
+        val configDir = File(context.getExternalFilesDir(null), "runtime_bridge")
+        configDir.mkdirs()
+        repository.writeRuntimeManifest(
+            targetFile = File(configDir, "active_profile.json"),
+            profile = profile,
+            mods = state.activeMods
+        )
+
+        val mcNativeDir = try {
+            context.packageManager.getApplicationInfo(state.config.packageName, 0).nativeLibraryDir ?: ""
+        } catch (_: PackageManager.NameNotFoundException) {
+            ""
+        }
+
+        val modPaths = state.activeMods
+            .map { it.localPath }
+            .filter { it.isNotBlank() }
+            .toTypedArray()
+
+        val hostIntent = Intent(context, AmethystGameActivity::class.java).apply {
+            putExtra("amethyst_profile_name", profile.name)
+            putExtra("amethyst_mc_version", profile.mcVersion)
+            putExtra("amethyst_mc_package", state.config.packageName)
+            putExtra("amethyst_mc_native_dir", mcNativeDir)
+            putExtra("amethyst_runtime_so", state.config.runtimePath)
+            putExtra("amethyst_mod_paths", modPaths)
+        }
+        context.startActivity(hostIntent)
     }
 
     fun importModArchive(resolver: ContentResolver, uri: Uri) {
         viewModelScope.launch {
-            val imported = repository.extractAndValidateMod(resolver, uri, detectDeviceAbi())
-            if (imported != null) {
-                val updated = _uiState.value.mods + imported
-                _uiState.value = _uiState.value.copy(mods = updated)
+            val result = withContext(Dispatchers.IO) {
+                repository.extractAndValidateMod(resolver, uri, detectDeviceAbi())
+            }
+            result.onSuccess { imported ->
+                val currentMods = _uiState.value.mods.filterNot { it.id == imported.id } + imported
+                val activeId = _uiState.value.activeProfileId
+                val updatedProfiles = _uiState.value.profiles.map { profile ->
+                    if (profile.id == activeId && !profile.modIds.contains(imported.id)) {
+                        profile.copy(modIds = profile.modIds + imported.id)
+                    } else {
+                        profile
+                    }
+                }
+                _uiState.value = _uiState.value.copy(
+                    mods = currentMods,
+                    profiles = updatedProfiles,
+                    statusMessage = "Mod ${imported.sourceFormat} importado y activado: ${imported.name} (${imported.libraryFile})"
+                )
                 repository.persistState(_uiState.value)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(
+                    statusMessage = "Error al importar mod: ${err.message ?: "archivo inválido"}"
+                )
+            }
+        }
+    }
+
+    fun importRuntimeArchive(resolver: ContentResolver, uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                repository.importRuntimeSo(resolver, uri)
+            }
+            result.onSuccess { file ->
+                val updatedConfig = _uiState.value.config.copy(runtimePath = file.absolutePath)
+                _uiState.value = _uiState.value.copy(
+                    config = updatedConfig,
+                    statusMessage = "Runtime cargado: ${file.name}"
+                )
+                repository.persistState(_uiState.value)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(
+                    statusMessage = "Error al importar runtime: ${err.message}"
+                )
             }
         }
     }

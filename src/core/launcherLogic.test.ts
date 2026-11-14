@@ -63,6 +63,21 @@ test('validateModImport enforces .so extension and semver version', () => {
   );
   assert.equal(invalidExt.result.valid, false);
 
+  const validAmethyst = validateModImport(
+    {
+      name: 'Amethyst Zoom',
+      version: '1.2.0',
+      author: 'Ruben',
+      targetApiVersion: '1.3.1',
+      targetMcVersion: '1.21.0.3',
+      abi: AndroidAbi.ARM64_V8A,
+      libraryFile: 'amethyst_zoom.amethyst',
+    },
+    state.mods
+  );
+  assert.equal(validAmethyst.result.valid, true);
+  assert.equal(validAmethyst.mod?.libraryFile, 'libamethyst_zoom.so');
+
   const validSo = validateModImport(
     {
       name: 'Shader Bridge',
