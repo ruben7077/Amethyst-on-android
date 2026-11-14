@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.rubenamethyst.app"
     compileSdk = 35
+    ndkVersion = "26.3.11579264"
 
     defaultConfig {
         applicationId = "com.rubenamethyst.app"
