@@ -4,6 +4,10 @@ project("amethyst_loader" LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+add_library(amethyst_runtime SHARED
+    amethyst_runtime.cpp
+)
+
 add_library(amethyst_loader SHARED
     amethyst_loader.cpp
 )
@@ -11,8 +15,15 @@ add_library(amethyst_loader SHARED
 find_library(log-lib log)
 find_library(android-lib android)
 
+target_link_libraries(amethyst_runtime
+    ${log-lib}
+    ${android-lib}
+    dl
+)
+
 target_link_libraries(amethyst_loader
     ${log-lib}
     ${android-lib}
+    amethyst_runtime
     dl
 )

@@ -51,9 +51,10 @@ fun LauncherScreen(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(active?.name ?: "Sin perfil", style = MaterialTheme.typography.titleLarge)
                 Text("MCBE ${active?.mcVersion ?: "-"} · ${active?.runtimeId ?: "-"} · ${state.activeMods.size} mods")
-                if (!isVanilla && state.config.runtimePath.isBlank()) {
+                if (!isVanilla) {
                     Text(
-                        "Runtime pendiente: importa libamethyst_runtime.so en Mods o Ajustes.",
+                        if (state.config.runtimePath.isBlank()) "Runtime: integrado en APK (libamethyst_runtime.so)"
+                        else "Runtime externo: ${state.config.runtimePath.substringAfterLast('/')}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -136,8 +137,8 @@ fun ModsScreen(
         }
         OutlinedButton(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {
             Text(
-                if (state.config.runtimePath.isBlank()) "Importar libamethyst_runtime.so"
-                else "Runtime: ${state.config.runtimePath.substringAfterLast('/')}"
+                if (state.config.runtimePath.isBlank()) "Runtime: integrado (reemplazar .so opcional)"
+                else "Runtime externo: ${state.config.runtimePath.substringAfterLast('/')}"
             )
         }
         state.statusMessage?.let { msg ->
@@ -190,9 +191,9 @@ fun SettingsScreen(
         Text("Paquete objetivo: ${config.packageName}")
         Text("Ruta scoped: ${config.storagePath}")
         Text("ABI: ${config.targetAbi}")
-        Text("Runtime .so: ${config.runtimePath.ifBlank { "No importado" }}")
+        Text("Runtime .so: ${config.runtimePath.ifBlank { "Integrado en APK (libamethyst_runtime.so)" }}")
         Button(onClick = onImportRuntimeClick, modifier = Modifier.fillMaxWidth()) {
-            Text("Seleccionar libamethyst_runtime.so")
+            Text("Reemplazar libamethyst_runtime.so (opcional)")
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Verificar ABI antes de iniciar")

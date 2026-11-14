@@ -4,11 +4,11 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -16,6 +16,7 @@ import com.rubenamethyst.app.ui.AmethystTheme
 
 class AmethystGameActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
         val profileName = intent.getStringExtra("amethyst_profile_name") ?: "Amethyst"
@@ -30,7 +31,8 @@ class AmethystGameActivity : ComponentActivity() {
             mcNativeDir = mcNativeDir,
             runtimeSoPath = runtimeSoPath,
             modSoPaths = modSoPaths,
-            mcVersion = mcVersion
+            mcVersion = mcVersion,
+            hasPackMods = packNotices.isNotEmpty()
         )
         val packSection = if (packNotices.isNotEmpty()) {
             "\n" + packNotices.joinToString("\n") { "[PACK_ONLY] $it" }
@@ -39,7 +41,11 @@ class AmethystGameActivity : ComponentActivity() {
         }
         val report = nativeReport + packSection
 
-        val canTryExternalPatched = nativeReport.contains("RUNTIME_OK") && !nativeReport.contains("MOD_ERROR")
+        val runtimeOk = nativeReport.contains("RUNTIME_OK")
+        val mcOk = nativeReport.contains("MC_OK")
+        val hasModErrors = nativeReport.contains("MOD_ERROR")
+        val hasAndroidSoMods = modSoPaths.isNotEmpty()
+        val canLaunchModded = runtimeOk && mcOk && !hasModErrors && hasAndroidSoMods
 
         setContent {
             AmethystTheme {
@@ -47,7 +53,8 @@ class AmethystGameActivity : ComponentActivity() {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(20.dp)
+                            .safeDrawingPadding()
+                            .padding(horizontal = 20.dp, vertical = 16.dp)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
@@ -75,12 +82,19 @@ class AmethystGameActivity : ComponentActivity() {
                             }
                         }
 
-                        if (!canTryExternalPatched) {
+                        if (packNotices.isNotEmpty() && !hasAndroidSoMods) {
                             Text(
-                                text = "Amethyst no inició el Minecraft normal para evitar abrir una sesión sin mods. Verifica que importaste libamethyst_runtime.so y tus mods .amethyst / .so para tu arquitectura.",
+                                text = "Los mods activos en este perfil solo contienen packs (.amethyst de Windows con .dll) sin librerías ELF (.so) para Android arm64-v8a. Sus resource/behavior packs ya fueron extraídos, pero los hooks C++ requieren un mod .amethyst compilado para Android.",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                        } else {
+                        } else if (!canLaunchModded) {
+                            Text(
+                                text = "Amethyst mantuvo abierta esta pantalla para no abrir Minecraft normal sin mods. Revisa el diagnóstico arriba (enlace nativo de libminecraftpe.so o compatibilidad .so del mod).",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        if (canLaunchModded) {
                             Button(
                                 onClick = {
                                     val launchIntent = packageManager.getLaunchIntentForPackage(mcPackage)

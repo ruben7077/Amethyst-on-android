@@ -148,6 +148,15 @@ test('Android port configuration uses com.rubenamethyst.app and generates valid 
   assert.ok(gradleFile?.content.includes('applicationId = "com.rubenamethyst.app"'));
   assert.ok(gradleFile?.content.includes('namespace = "com.rubenamethyst.app"'));
 
+  const runtimeCpp = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/amethyst_runtime.cpp');
+  assert.ok(runtimeCpp?.content.includes('Amethyst_InitRuntime'));
+  const loaderCpp = ANDROID_PORT_FILES.find((f) => f.path === 'app/src/main/cpp/amethyst_loader.cpp');
+  assert.ok(loaderCpp?.content.includes('PreloadSiblingLibraries'));
+  const gameActivity = ANDROID_PORT_FILES.find(
+    (f) => f.path === 'app/src/main/java/com/rubenamethyst/app/AmethystGameActivity.kt'
+  );
+  assert.ok(gameActivity?.content.includes('safeDrawingPadding'));
+
   const zipBytes = buildZipArchive([
     ...ANDROID_PORT_FILES.map((f) => ({ path: `android/${f.path}`, content: f.content })),
     {

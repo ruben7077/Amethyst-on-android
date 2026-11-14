@@ -5,10 +5,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Layers
@@ -35,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: AmethystLauncherViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             AmethystTheme {
@@ -55,6 +59,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Scaffold(
+                    contentWindowInsets = WindowInsets.safeDrawing,
                     bottomBar = {
                         NavigationBar {
                             NavigationBarItem(

@@ -119,7 +119,11 @@ class ModRepository(private val baseDir: File) {
 
     private fun ensureBonusModsSeeded(state: LauncherUiState, assets: AssetManager?): LauncherUiState {
         if (assets == null) return state
-        if (state.mods.any { it.isBonus || it.id == "create" || it.id == "create-0-1-1" }) {
+        val staleCreate = state.mods.firstOrNull {
+            (it.id == "create-0-1-1" || it.name.startsWith("Create@")) && it.version == "1.0.0"
+        }
+        val alreadyHasCleanBonus = state.mods.any { it.isBonus && it.version != "1.0.0" }
+        if (alreadyHasCleanBonus && staleCreate == null) {
             return state
         }
         return try {
@@ -131,7 +135,24 @@ class ModRepository(private val baseDir: File) {
                 isBonus = true
             )
             val bonusMod = result.getOrNull() ?: return state
-            val updated = state.copy(mods = listOf(bonusMod) + state.mods)
+            val cleanedMods = state.mods.filterNot {
+                it.id == bonusMod.id || it.id == "create-0-1-1" || it.name.startsWith("Create@")
+            }
+            val cleanedProfiles = if (staleCreate != null) {
+                state.profiles.map { profile ->
+                    if (profile.modIds.contains(staleCreate.id)) {
+                        profile.copy(modIds = (profile.modIds - staleCreate.id + bonusMod.id).distinct())
+                    } else {
+                        profile
+                    }
+                }
+            } else {
+                state.profiles
+            }
+            val updated = state.copy(
+                mods = listOf(bonusMod) + cleanedMods,
+                profiles = cleanedProfiles
+            )
             persistState(updated)
             updated
         } catch (_: Exception) {
@@ -260,6 +281,19 @@ class ModRepository(private val baseDir: File) {
         metaObj.optString("id").takeIf { it.isNotBlank() }?.let { map["id"] = it }
         metaObj.optString("targetMcVersion").takeIf { it.isNotBlank() }?.let { map["targetMcVersion"] = it }
 
+        val header = rawMeta.optJSONObject("header")
+        if (header != null) {
+            if (!map.containsKey("name")) {
+                header.optString("name").takeIf { it.isNotBlank() }?.let { map["name"] = it }
+            }
+            if (!map.containsKey("version")) {
+                val verArr = header.optJSONArray("version")
+                if (verArr != null && verArr.length() >= 3) {
+                    map["version"] = "${verArr.optInt(0)}.${verArr.optInt(1)}.${verArr.optInt(2)}"
+                }
+            }
+        }
+
         val platforms = metaObj.optJSONObject("platforms")
         val androidBuild = platforms?.optJSONObject("android-client")?.optJSONArray("game_builds")?.optJSONObject(0)
         val winBuild = platforms?.optJSONObject("win-client")?.optJSONArray("game_builds")?.optJSONObject(0)
@@ -313,7 +347,8 @@ class ModRepository(private val baseDir: File) {
             val modDir = File(modsRoot, baseId).apply { mkdirs() }
 
             if (isZip) {
-                var parsedMetaJson: JSONObject? = null
+                var modJsonObj: JSONObject? = null
+                var fallbackManifestObj: JSONObject? = null
                 var preferredSo: File? = null
                 var fallbackSo: File? = null
                 var dllFile: File? = null
@@ -333,10 +368,13 @@ class ModRepository(private val baseDir: File) {
                             if (safeRel.startsWith("behavior_packs/") || safeRel.startsWith("resource_packs/")) {
                                 hasPacks = true
                             }
-                            if (fileName.equals("mod.json", ignoreCase = true) ||
-                                fileName.equals("manifest.json", ignoreCase = true)
-                            ) {
-                                parsedMetaJson = runCatching { JSONObject(outFile.readText()) }.getOrNull()
+                            if (fileName.equals("mod.json", ignoreCase = true)) {
+                                val parsed = runCatching { JSONObject(outFile.readText()) }.getOrNull()
+                                if (parsed != null && (modJsonObj == null || !safeRel.contains('/'))) {
+                                    modJsonObj = parsed
+                                }
+                            } else if (fileName.equals("manifest.json", ignoreCase = true) && fallbackManifestObj == null) {
+                                fallbackManifestObj = runCatching { JSONObject(outFile.readText()) }.getOrNull()
                             } else if (fileName.endsWith(".so", ignoreCase = true)) {
                                 outFile.setReadable(true, false)
                                 outFile.setExecutable(true, false)
@@ -361,7 +399,7 @@ class ModRepository(private val baseDir: File) {
                     )
                 }
 
-                val parsed = parseModMetadata(parsedMetaJson)
+                val parsed = parseModMetadata(modJsonObj ?: fallbackManifestObj)
                 val modName = parsed["name"] ?: displayName.substringBeforeLast(".").replace('_', ' ')
                 val modVersion = parsed["version"] ?: "1.0.0"
                 val modAuthor = parsed["author"] ?: "AmethystMod"
